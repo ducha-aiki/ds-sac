@@ -151,6 +151,10 @@ Caveats:
   i.e. a per-method-tuned operating point, not a single fixed protocol.
 - The RANSAC-family baselines are not seeded (pydegensac and OpenCV use internal randomness), so
   their exact figures vary slightly run to run; only DS-SAC is bit-exact reproducible.
+- pydegensac's mean runtime is iteration-budget-bound, not implementation-bound: on typical pairs
+  it terminates by confidence in ~1 ms, but on the ~20–30%-inlier-ratio pairs of this protocol
+  reaching conf 0.999 needs more than the 2000-iteration cap, so those pairs run the full budget
+  and dominate the mean. At friendlier inlier ratios (≥45%) it is sub-millisecond.
 
 ### Accuracy vs. compute budget
 
