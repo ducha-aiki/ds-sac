@@ -57,7 +57,7 @@ def dlt(pts1, pts2):
 def transfer_error_sq(H, pts1, pts2):
     """Squared one-way transfer error ||H*p1 - p2||^2, per point. (N,)"""
     den = pts1 @ H[2, :2] + H[2, 2]
-    den = np.where(np.abs(den) < 1e-12, 1e-12, den)
+    den = np.where(np.abs(den) < 1e-12, np.copysign(1e-12, den), den)
     x = (pts1 @ H[0, :2] + H[0, 2]) / den
     y = (pts1 @ H[1, :2] + H[1, 2]) / den
     return (x - pts2[:, 0]) ** 2 + (y - pts2[:, 1]) ** 2

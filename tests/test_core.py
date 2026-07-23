@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import dssac
 from dssac.core import _Best, _score, _forward_search, _backward_search, _search_partition
 from dssac.homography import transfer_error_sq
@@ -70,6 +71,25 @@ def test_backward_search_does_not_regress():
     assert glob.score >= score_before
 
 
+def test_backward_search_sweeps_expected_percentile_range(monkeypatch):
+    import dssac.core as core
+    pts1, pts2, _ = make_scene(50, 0, noise=0.1, seed=0)
+    S = np.arange(len(pts1))
+    local = _Best()
+    local.H = np.eye(3)
+    local.p = 0.2
+    seen = []
+
+    def fake_refine(pts1_, pts2_, S_, H, p, T_sq, local_, glob_):
+        seen.append(p)
+        return H
+
+    monkeypatch.setattr(core, "_refine_round", fake_refine)
+    _backward_search(pts1, pts2, S, T_sq=4.0, dp=0.1, local=local, glob=_Best())
+    # p_part = 1.0, so the sweep should cover local.p + dp .. 0.5 inclusive
+    assert np.allclose(seen, [0.3, 0.4, 0.5])
+
+
 def test_search_partition_high_outlier_ratio():
     # 80% outliers: forward search from the full set alone is unlikely to be
     # enough; recursive partitioning must dig the structure out. Final accuracy
@@ -113,3 +133,12 @@ def test_find_homography_normalized_h33():
     pts1, pts2, _ = make_scene(100, 20, noise=0.3, seed=2)
     H, _ = dssac.find_homography(pts1, pts2, threshold=2.0)
     assert np.isclose(H[2, 2], 1.0)
+
+
+def test_find_homography_rejects_wrong_shape():
+    good = np.zeros((10, 2))
+    bad = np.zeros((10, 3))
+    with pytest.raises(ValueError):
+        dssac.find_homography(bad, bad)
+    with pytest.raises(ValueError):
+        dssac.find_homography(good, np.zeros((11, 2)))

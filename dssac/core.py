@@ -144,10 +144,10 @@ def find_homography(pts1, pts2, threshold=0.54, dp=0.03, p_min=0.2,
         (H, mask): 3x3 array with H[2,2] == 1 and boolean inlier mask,
         or (None, None) on failure.
     """
-    pts1 = np.ascontiguousarray(pts1, dtype=np.float64).reshape(-1, 2)
-    pts2 = np.ascontiguousarray(pts2, dtype=np.float64).reshape(-1, 2)
-    if len(pts1) != len(pts2):
-        raise ValueError("pts1 and pts2 must have the same length")
+    pts1 = np.ascontiguousarray(pts1, dtype=np.float64)
+    pts2 = np.ascontiguousarray(pts2, dtype=np.float64)
+    if pts1.ndim != 2 or pts1.shape[1] != 2 or pts1.shape != pts2.shape:
+        raise ValueError("pts1 and pts2 must both have shape (N, 2)")
     if len(pts1) < MIN_PTS:
         return None, None
     T_sq = float(threshold) ** 2

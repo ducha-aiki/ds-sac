@@ -66,3 +66,18 @@ def test_signed_residual_zero_on_perfect_points():
     pts1 = rng.uniform(0, 640, (10, 2))
     pts2 = project(H_GT, pts1)
     assert np.allclose(signed_residual(H_GT, pts1, pts2), 0.0, atol=1e-9)
+
+
+def test_transfer_error_vanishing_line_not_reported_as_inlier():
+    # Point essentially on the vanishing line of H (denominator ~ -5e-13),
+    # with a numerator that stays O(1) instead of shrinking with it (H's
+    # first row is not proportional to its third), so the true mapped point
+    # diverges toward -infinity. A sign-discarding clamp used to instead
+    # clamp the denominator to +1e-12, flipping the sign of the projected
+    # point so it spuriously matched a "prediction" placed at +1e12 -
+    # reporting a near-zero transfer error for a point that should be a
+    # huge outlier.
+    H = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+    pts1 = np.array([[-5e-13, 0.0]])
+    pts2 = np.array([[1e12, 0.0]])
+    assert transfer_error_sq(H, pts1, pts2)[0] > 1e6
