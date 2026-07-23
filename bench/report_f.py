@@ -23,28 +23,38 @@ def main():
     groups = defaultdict(list)
     for line in open(ROOT / args.results):
         r = json.loads(line)
-        groups[(r["scene"], r["method"], r["th"])].append(r)
+        groups[(r["scene"], r["method"], r["th"], r.get("snn", 1.0))].append(r)
+
+    show_snn = len({k[3] for k in groups}) > 1
+    header = ("| method | th (px) | snn | mAA@10deg | median err (deg) | mean time (s) |"
+              if show_snn else
+              "| method | th (px) | mAA@10deg | median err (deg) | mean time (s) |")
+    sep = "|---|" + "---|" * (5 if show_snn else 4)
 
     scenes = sorted({k[0] for k in groups})
     for sc in scenes:
         print(f"\n## {sc}\n")
-        print("| method | th (px) | mAA@10deg | median err (deg) | mean time (s) |")
-        print("|---|---|---|---|---|")
+        print(header)
+        print(sep)
         best = {}
-        for (s, m, th), recs in sorted(groups.items()):
+        for (s, m, th, snn), recs in sorted(groups.items()):
             if s != sc:
                 continue
             errs = [r["err_deg"] for r in recs]
-            row = (m, th, maa_f(errs), float(np.median(errs)),
-                   float(np.mean([r["time"] for r in recs])))
-            print("| {} | {} | {:.4f} | {:.2f} | {:.4f} |".format(*row))
-            if m not in best or row[2] > best[m][2]:
-                best[m] = row
+            stats = (maa_f(errs), float(np.median(errs)),
+                     float(np.mean([r["time"] for r in recs])))
+            row = (m, th) + ((snn,) if show_snn else ()) + stats
+            print(("| " + " | ".join(["{}"] * (len(row) - 3))
+                   + " | {:.4f} | {:.2f} | {:.4f} |").format(*row))
+            if m not in best or stats[0] > best[m][1][0]:
+                best[m] = (row[:-3], stats)
         print(f"\nBest per method ({sc}):")
-        print("| method | th (px) | mAA@10deg | median err (deg) | mean time (s) |")
-        print("|---|---|---|---|---|")
-        for m, row in sorted(best.items(), key=lambda kv: -kv[1][2]):
-            print("| {} | {} | {:.4f} | {:.2f} | {:.4f} |".format(*row))
+        print(header)
+        print(sep)
+        for m, (key, stats) in sorted(best.items(), key=lambda kv: -kv[1][1][0]):
+            row = key + stats
+            print(("| " + " | ".join(["{}"] * len(key))
+                   + " | {:.4f} | {:.2f} | {:.4f} |").format(*row))
 
 
 if __name__ == "__main__":

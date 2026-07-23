@@ -23,6 +23,12 @@ def run_dssac_f(pts1, pts2, th):
     return dssac.find_fundamental(pts1, pts2, threshold=th)
 
 
+def run_dssac_f_pmin01(pts1, pts2, th):
+    # Lower partition/percentile floor: tolerates inlier ratios down to ~10%
+    # at the cost of a deeper search tree.
+    return dssac.find_fundamental(pts1, pts2, threshold=th, p_min=0.1)
+
+
 def run_pydegensac_f(pts1, pts2, th):
     F, mask = pydegensac.findFundamentalMatrix(pts1, pts2, th, CONF, MAX_ITERS)
     if F is None:
@@ -32,6 +38,7 @@ def run_pydegensac_f(pts1, pts2, th):
 
 F_METHODS = {
     "dssac": run_dssac_f,
+    "dssac-pmin0.1": run_dssac_f_pmin01,
     "pydegensac": run_pydegensac_f,
     "cv2-ransac": _cv2_f_method(cv2.FM_RANSAC),
     "cv2-magsac": _cv2_f_method(cv2.USAC_MAGSAC),
