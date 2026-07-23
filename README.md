@@ -126,7 +126,7 @@ and task-by-task notes.
 ```bibtex
 @article{thapa2026dssac,
   title   = {DS-SAC: Density Search for Sample Consensus},
-  author  = {Thapa and Islam},
+  author  = {Thapa, Suraj and Islam, Muhammad Aminul},
   journal = {arXiv preprint arXiv:2607.03972},
   year    = {2026}
 }
