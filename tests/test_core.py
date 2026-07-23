@@ -1,5 +1,5 @@
 import numpy as np
-from dssac.core import _Best, _score, _forward_search
+from dssac.core import _Best, _score, _forward_search, _backward_search, _search_partition
 from dssac.homography import transfer_error_sq
 
 H_GT = np.array([[1.2, 0.1, 30.0],
@@ -57,3 +57,27 @@ def test_forward_search_moderate_outliers():
     assert local.H is not None
     assert max_corner_error(local.H) < 3.0
     assert best.score[0] >= 0.9 * gt.sum()
+
+
+def test_backward_search_does_not_regress():
+    pts1, pts2, _ = make_scene(150, 100, noise=0.5, seed=3)
+    glob = _Best()
+    S = np.arange(len(pts1))
+    local = _forward_search(pts1, pts2, S, T_sq=4.0, dp=0.03, p_min=0.2, glob=glob)
+    score_before = glob.score
+    _backward_search(pts1, pts2, S, T_sq=4.0, dp=0.03, local=local, glob=glob)
+    assert glob.score >= score_before
+
+
+def test_search_partition_high_outlier_ratio():
+    # 80% outliers: forward search from the full set alone is unlikely to be
+    # enough; recursive partitioning must dig the structure out. Final accuracy
+    # at this contamination level is delivered by post-tuning (find_homography);
+    # this stage only needs to land in the true model's basin of attraction.
+    pts1, pts2, gt = make_scene(100, 400, noise=0.5, seed=7)
+    glob = _Best()
+    _search_partition(pts1, pts2, np.arange(len(pts1)),
+                      T_sq=4.0, dp=0.03, p_min=0.2, glob=glob)
+    assert glob.H is not None
+    assert max_corner_error(glob.H) < 10.0
+    assert glob.score[0] >= 0.6 * gt.sum()

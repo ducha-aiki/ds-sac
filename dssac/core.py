@@ -1,5 +1,5 @@
 """DS-SAC search: forward/backward percentile search, partitioning, post-tuning."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -49,8 +49,9 @@ def _refine_round(pts1, pts2, S, H, p, T_sq, local, glob):
     supp = S[inl] if inl.sum() >= MIN_PTS else S[np.argsort(d2)[:MIN_PTS]]
     H_i = dlt(pts1[supp], pts2[supp])
     if H_i is not None:
+        prev_best = local.score
         sc = _consider(H_i, pts1, pts2, T_sq, p, local, glob)
-        if sc >= _score(transfer_error_sq(H, pts1, pts2), T_sq):
+        if sc > prev_best:
             H = H_i
     return H
 
@@ -67,3 +68,45 @@ def _forward_search(pts1, pts2, S, T_sq, dp, p_min, glob):
     for p in np.arange(p_part, p_min - 1e-9, -dp):
         H = _refine_round(pts1, pts2, S, H, p, T_sq, local, glob)
     return local
+
+
+def _backward_search(pts1, pts2, S, T_sq, dp, local, glob):
+    """Expand from the forward best percentile up to 0.5 * p_partition."""
+    if local.H is None:
+        return
+    N = len(pts1)
+    p_bwd = 0.5 * (len(S) / N)
+    H = local.H
+    for p in np.arange(local.p + dp, p_bwd + 1e-9, dp):
+        H = _refine_round(pts1, pts2, S, H, p, T_sq, local, glob)
+
+
+_MAX_DEPTH = 64
+
+
+def _search_partition(pts1, pts2, S, T_sq, dp, p_min, glob, depth=0):
+    """Forward + backward search on S, then recurse on the signed-residual split."""
+    N = len(pts1)
+    if len(S) < max(int(np.ceil(p_min * N)), MIN_PTS) or depth > _MAX_DEPTH:
+        return
+    local = _forward_search(pts1, pts2, S, T_sq, dp, p_min, glob)
+    if local is None or local.H is None:
+        return
+    _backward_search(pts1, pts2, S, T_sq, dp, local, glob)
+    r = signed_residual(local.H, pts1[S], pts2[S])
+    S_plus = S[r >= 0]
+    S_minus = S[r < 0]
+    if len(S_plus) == 0 or len(S_minus) == 0:
+        # One-sided split on the local best: fall back to splitting on the
+        # plain LSQ fit of the whole partition (theta_init), which sits
+        # "between" structures rather than overfitting to a handful of points.
+        H_init = dlt(pts1[S], pts2[S])
+        if H_init is None:
+            return
+        r = signed_residual(H_init, pts1[S], pts2[S])
+        S_plus = S[r >= 0]
+        S_minus = S[r < 0]
+        if len(S_plus) == 0 or len(S_minus) == 0:
+            return  # split failed; recursing would loop on the same set
+    _search_partition(pts1, pts2, S_plus, T_sq, dp, p_min, glob, depth + 1)
+    _search_partition(pts1, pts2, S_minus, T_sq, dp, p_min, glob, depth + 1)
