@@ -176,6 +176,52 @@ Reproduce:
 .venv/bin/python bench/plot_time_maa.py --results-snn results/time_maa_snn.jsonl
 ```
 
+## Fundamental matrix
+
+`dssac.find_fundamental(pts1, pts2, threshold=0.59)` (and batch `find_fundamentals`) runs the
+same deterministic search with the paper's F-specific pieces: Hartley-normalized least-squares
+**8-point fits with rank-2 enforcement** (no minimal 7-point solver anywhere — that is the
+paper's point), **Sampson distance** residuals, and the signed epipolar constraint `x2ᵀFx1`
+for partitioning. `p_min` matters more for F: the default 0.2 assumes ≥20% inliers, and
+`p_min=0.1` is measurably better on PhotoTourism-style data.
+
+Benchmark: one PhotoTourism validation scene (st_peters_square, 4950 pairs) fetched by
+`bench/setup_f_data.sh` via a 500 MB partial download of the tutorial's ValOnly archive (the
+needed h5 files precede the images in the tar). Metric: max(rotation, translation) angular
+error of the pose recovered from F (converted to E with GT intrinsics), per
+[ransac-benchmark-2025](https://github.com/ducha-aiki/ransac-benchmark-2025), mAA over 1–10°.
+This data ships **unfiltered**, so the protocol sweeps the SNN ratio threshold for all methods:
+
+```bash
+bench/setup_f_data.sh
+.venv/bin/python bench/run_bench_f.py --snn 0.6 0.65 0.7 0.75 0.8 0.85 1.0 --out results/results_f_snn.jsonl
+.venv/bin/python bench/report_f.py --results results/results_f_snn.jsonl
+```
+
+Best mAA@10° (over the 0.5–2 px inlier-threshold sweep) per method × SNN threshold:
+
+| method | 0.6 | 0.65 | 0.7 | 0.75 | 0.8 | 0.85 | 1.0 (off) |
+|---|---|---|---|---|---|---|---|
+| dssac | 0.228 | 0.263 | 0.280 | **0.285** | 0.262 | 0.207 | 0.013 |
+| dssac-pmin0.1 | 0.234 | 0.270 | 0.296 | **0.304** | 0.292 | 0.248 | 0.018 |
+| pydegensac | 0.203 | 0.242 | 0.267 | 0.277 | **0.297** | 0.280 | 0.050 |
+| cv2-ransac | 0.173 | 0.210 | 0.253 | 0.281 | **0.303** | 0.291 | 0.074 |
+| cv2-magsac | 0.255 | 0.294 | 0.331 | **0.359** | 0.355 | 0.325 | 0.118 |
+
+Takeaways:
+
+- Every method peaks at SNN 0.75–0.8 and collapses without filtering (mAA ≤ 0.12 even for
+  MAGSAC++): the raw tentative matches often have 11–15% inliers, too few for reliable F
+  estimation across the board.
+- `p_min = 0.1` helps DS-SAC at *every* SNN level (+0.02–0.04 mAA for ~1.6× runtime,
+  2.5 ms/pair), lifting it above pydegensac and cv2-RANSAC to second place behind MAGSAC++.
+  It does **not** rescue the unfiltered regime — below ~20% inliers the least-squares
+  annealing start is captured by outlier structure before the percentile floor is reached,
+  regardless of the floor.
+- DS-SAC degrades faster than the RANSAC family as the SNN threshold loosens past 0.8 —
+  consistent with its density-search design being more sensitive to the outlier ratio, and
+  with it having no dominant-plane degeneracy test (the problem DEGENSAC targets).
+
 ## Implementation notes
 
 Hyperparameters follow the paper's stated defaults: percentile step `Δp = 0.03`, minimum
