@@ -1,0 +1,59 @@
+import numpy as np
+from dssac.core import _Best, _score, _forward_search
+from dssac.homography import transfer_error_sq
+
+H_GT = np.array([[1.2, 0.1, 30.0],
+                 [-0.05, 0.9, 20.0],
+                 [1e-4, -2e-4, 1.0]])
+
+
+def project(H, pts):
+    ph = np.hstack([pts, np.ones((len(pts), 1))]) @ H.T
+    return ph[:, :2] / ph[:, 2:3]
+
+
+def make_scene(n_inl, n_out, noise=0.5, seed=0):
+    rng = np.random.default_rng(seed)
+    p1 = rng.uniform(0, 640, (n_inl, 2))
+    p2 = project(H_GT, p1) + rng.normal(0, noise, (n_inl, 2))
+    o1 = rng.uniform(0, 640, (n_out, 2))
+    o2 = rng.uniform(0, 640, (n_out, 2))
+    pts1 = np.vstack([p1, o1])
+    pts2 = np.vstack([p2, o2])
+    perm = rng.permutation(len(pts1))
+    gt_inlier = np.zeros(len(pts1), bool)
+    gt_inlier[:n_inl] = True
+    return pts1[perm], pts2[perm], gt_inlier[perm]
+
+
+def max_corner_error(H_est, w=640, h=480):
+    corners = np.array([[0., 0.], [w, 0.], [w, h], [0., h]])
+    return np.abs(project(H_GT, corners) - project(H_est, corners)).max()
+
+
+def test_score_counts_inliers_and_breaks_ties_with_msac():
+    d2_a = np.array([0.0, 0.5, 10.0])
+    d2_b = np.array([0.4, 0.5, 10.0])
+    T_sq = 1.0
+    sa, sb = _score(d2_a, T_sq), _score(d2_b, T_sq)
+    assert sa[0] == sb[0] == 2
+    assert sa > sb  # smaller residuals win the MSAC tie-break
+
+
+def test_forward_search_clean_data():
+    pts1, pts2, _ = make_scene(100, 0, noise=0.1)
+    best = _Best()
+    local = _forward_search(pts1, pts2, np.arange(len(pts1)),
+                            T_sq=4.0, dp=0.03, p_min=0.2, glob=best)
+    assert local.H is not None
+    assert max_corner_error(local.H) < 1.0
+
+
+def test_forward_search_moderate_outliers():
+    pts1, pts2, gt = make_scene(150, 100, noise=0.5, seed=3)
+    best = _Best()
+    local = _forward_search(pts1, pts2, np.arange(len(pts1)),
+                            T_sq=4.0, dp=0.03, p_min=0.2, glob=best)
+    assert local.H is not None
+    assert max_corner_error(local.H) < 3.0
+    assert best.score[0] >= 0.9 * gt.sum()
