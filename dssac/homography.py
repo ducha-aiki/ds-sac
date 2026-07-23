@@ -52,3 +52,21 @@ def dlt(pts1, pts2):
     if not np.all(np.isfinite(H)) or abs(H[2, 2]) < 1e-12:
         return None
     return H
+
+
+def transfer_error_sq(H, pts1, pts2):
+    """Squared one-way transfer error ||H*p1 - p2||^2, per point. (N,)"""
+    den = pts1 @ H[2, :2] + H[2, 2]
+    den = np.where(np.abs(den) < 1e-12, 1e-12, den)
+    x = (pts1 @ H[0, :2] + H[0, 2]) / den
+    y = (pts1 @ H[1, :2] + H[1, 2]) / den
+    return (x - pts2[:, 0]) ** 2 + (y - pts2[:, 1]) ** 2
+
+
+def signed_residual(H, pts1, pts2):
+    """Signed residual from the first DLT equation (used for partitioning):
+    r = u*h11 + v*h12 + h13 - u'*(u*h31 + v*h32 + h33)."""
+    u, v = pts1[:, 0], pts1[:, 1]
+    up = pts2[:, 0]
+    return (u * H[0, 0] + v * H[0, 1] + H[0, 2]
+            - up * (u * H[2, 0] + v * H[2, 1] + H[2, 2]))
