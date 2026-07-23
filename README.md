@@ -19,7 +19,7 @@ pass refits the global-best model on inlier sets at relaxed-to-strict thresholds
 
 ```bash
 pip install -e .          # pure NumPy (the only runtime dependency)
-pip install -e ".[fast]"  # + numba/scipy fast backend, ~9x faster
+pip install -e ".[fast]"  # + numba fast backend, ~9x faster (~35x batched)
 ```
 
 Requires Python >= 3.10.
@@ -52,6 +52,13 @@ Parameters:
 
 The estimator is fully deterministic: the same inputs always produce the same output, with no
 random sampling and nothing to seed.
+
+For many pairs at once, the batch API runs one pair per CPU core (numba backend required) and
+returns exactly what per-pair calls would:
+
+```python
+results = dssac.find_homographies(pts1_list, pts2_list, threshold=2.0)
+```
 
 ## Benchmark
 
@@ -188,16 +195,19 @@ Two interchangeable backends implement the identical algorithm:
 - **numpy** (`dssac/core.py` + `dssac/homography.py`): dependency-free reference,
   ~20 ms/pair on the benchmark data (N ≈ 500–1400).
 - **numba** (`dssac/_fast.py`, `pip install "dssac[fast]"`): the whole pipeline — moment-form
-  normal equations + 9x9 `eigh` for each DLT fit, fused residual/score loops, O(N) percentile
-  selection via `np.partition`, explicit-stack recursive partitioning, post-tuning — as
-  `@njit(cache=True)` kernels: ~2–4 ms/pair, ~9x faster. First call pays ~5 s of JIT
-  compilation (cached on disk afterwards).
+  normal equations solved with a built-in cyclic Jacobi 9x9 eigensolver (no scipy/LAPACK
+  dependency), fused residual/score loops, O(N) percentile selection via `np.partition`,
+  array-stack recursive partitioning, post-tuning — as `@njit(cache=True)` kernels:
+  ~2–4 ms/pair, ~9x faster. `find_homographies` additionally parallelizes across pairs with
+  `numba.prange` (~0.75 ms/pair effective on 8 cores, ~35x vs the NumPy baseline), with
+  results identical to per-pair calls. First call pays a few seconds of JIT compilation
+  (cached on disk afterwards).
 
 Both are deterministic. They may differ in the last floating-point bits (summation order,
-selection tie-breaks), which on a few bifurcation-sensitive pairs flips the search into a
-different local optimum — in our benchmark this slightly *helped* the numba backend
-(HPatchesSeq mAA 0.844 vs 0.829, EVD identical). `bench/perf_check.py` maintains per-backend
-golden outputs for exact regression checks.
+selection tie-breaks, eigensolver), which on a few bifurcation-sensitive pairs flips the search
+into a different local optimum — in our benchmark this slightly *helped* the numba backend
+(HPatchesSeq mAA 0.844 vs 0.829, EVD 0.514 vs 0.500). `bench/perf_check.py` maintains
+per-backend golden outputs for exact regression checks.
 
 See `docs/superpowers/specs/2026-07-23-dssac-homography-design.md` for the full design spec and
 `docs/superpowers/plans/2026-07-23-dssac-homography.md` for the step-by-step implementation plan

@@ -188,3 +188,51 @@ def find_homography(pts1, pts2, threshold=0.54, dp=0.03, p_min=0.2,
         H = H / H[2, 2]
     mask = transfer_error_sq(H, pts1, pts2) <= T_sq
     return H, mask
+
+
+def find_homographies(pts1_list, pts2_list, threshold=0.54, dp=0.03, p_min=0.2,
+                      post_tuning_ks=(3.0, 2.0, 1.5, 1.0)):
+    """Batch DS-SAC over many pairs, processed in parallel across CPU cores.
+
+    Requires the numba backend (pip install "dssac[fast]"). Results are
+    identical to calling find_homography(..., backend="numba") per pair;
+    thread scheduling cannot affect them since pairs are independent.
+
+    Args:
+        pts1_list, pts2_list: sequences of (N_i, 2) correspondence arrays.
+        Remaining arguments as in find_homography.
+
+    Returns:
+        List of (H, mask) tuples, (None, None) where estimation failed.
+    """
+    if _fast is None:
+        raise RuntimeError("find_homographies requires numba "
+                           '(pip install "dssac[fast]")')
+    if len(pts1_list) != len(pts2_list):
+        raise ValueError("pts1_list and pts2_list must have the same length")
+    if len(pts1_list) == 0:
+        return []
+    arrs1, arrs2 = [], []
+    for a1, a2 in zip(pts1_list, pts2_list):
+        a1 = np.ascontiguousarray(a1, dtype=np.float64)
+        a2 = np.ascontiguousarray(a2, dtype=np.float64)
+        if a1.ndim != 2 or a1.shape[1] != 2 or a1.shape != a2.shape:
+            raise ValueError("every pair must consist of two (N, 2) arrays")
+        arrs1.append(a1)
+        arrs2.append(a2)
+    offsets = np.zeros(len(arrs1) + 1, dtype=np.int64)
+    np.cumsum([len(a) for a in arrs1], out=offsets[1:])
+    T_sq = float(threshold) ** 2
+    Hs, found = _fast.search_batch(
+        np.concatenate(arrs1), np.concatenate(arrs2), offsets, T_sq,
+        float(dp), float(p_min), np.asarray(post_tuning_ks, dtype=np.float64))
+    results = []
+    for i, (a1, a2) in enumerate(zip(arrs1, arrs2)):
+        if not found[i]:
+            results.append((None, None))
+            continue
+        H = Hs[i]
+        if abs(H[2, 2]) > 1e-12:
+            H = H / H[2, 2]
+        results.append((H, transfer_error_sq(H, a1, a2) <= T_sq))
+    return results

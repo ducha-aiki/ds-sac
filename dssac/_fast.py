@@ -9,9 +9,82 @@ in mAA on the benchmark). Fully deterministic for a fixed input, like the
 NumPy path.
 """
 import numpy as np
-from numba import njit
+from numba import njit, prange
 
 from .homography import MIN_PTS
+
+
+@njit(cache=True)
+def _eigh9(A):
+    """Eigendecomposition of a symmetric 9x9 matrix by cyclic Jacobi rotations.
+
+    Returns (w, V) with eigenvalues ascending and eigenvectors in columns,
+    like np.linalg.eigh, but without the scipy/LAPACK dependency. Deterministic;
+    converges quadratically (a handful of sweeps for 9x9).
+    """
+    n = 9
+    a = A.copy()
+    V = np.eye(n)
+    for _sweep in range(50):
+        off = 0.0
+        for i in range(n - 1):
+            for j in range(i + 1, n):
+                off += a[i, j] * a[i, j]
+        norm = 0.0
+        for i in range(n):
+            for j in range(n):
+                norm += a[i, j] * a[i, j]
+        if off <= 1e-30 * (norm if norm > 0.0 else 1.0):
+            break
+        for p in range(n - 1):
+            for q in range(p + 1, n):
+                apq = a[p, q]
+                if apq == 0.0:
+                    continue
+                # Rotation angle zeroing a[p, q] (Golub & Van Loan 8.4).
+                tau = (a[q, q] - a[p, p]) / (2.0 * apq)
+                if tau >= 0.0:
+                    t = 1.0 / (tau + np.sqrt(1.0 + tau * tau))
+                else:
+                    t = -1.0 / (-tau + np.sqrt(1.0 + tau * tau))
+                c = 1.0 / np.sqrt(1.0 + t * t)
+                s = t * c
+                app = a[p, p]
+                aqq = a[q, q]
+                a[p, p] = app - t * apq
+                a[q, q] = aqq + t * apq
+                a[p, q] = 0.0
+                a[q, p] = 0.0
+                for k in range(n):
+                    if k != p and k != q:
+                        akp = a[k, p]
+                        akq = a[k, q]
+                        a[k, p] = c * akp - s * akq
+                        a[p, k] = a[k, p]
+                        a[k, q] = s * akp + c * akq
+                        a[q, k] = a[k, q]
+                for k in range(n):
+                    vkp = V[k, p]
+                    vkq = V[k, q]
+                    V[k, p] = c * vkp - s * vkq
+                    V[k, q] = s * vkp + c * vkq
+    w = np.empty(n)
+    for i in range(n):
+        w[i] = a[i, i]
+    # Insertion sort ascending, carrying eigenvector columns along.
+    for i in range(1, n):
+        wi = w[i]
+        col = V[:, i].copy()
+        j = i - 1
+        while j >= 0 and w[j] > wi:
+            w[j + 1] = w[j]
+            for k in range(n):
+                V[k, j + 1] = V[k, j]
+            j -= 1
+        w[j + 1] = wi
+        for k in range(n):
+            V[k, j + 1] = col[k]
+    return w, V
 
 
 @njit(cache=True)
@@ -137,7 +210,7 @@ def _fit(pts1, pts2, idx):
         for b in range(a):
             ata[a, b] = ata[b, a]
 
-    w, V = np.linalg.eigh(ata)
+    w, V = _eigh9(ata)
     wmax = w[8] if w[8] > 1.0 else 1.0
     if w[1] < 1e-9 * wmax:
         return H, False
@@ -282,12 +355,32 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
     if min_size < MIN_PTS:
         min_size = MIN_PTS
 
-    stack = [np.arange(N)]
-    depths = [0]
-    while len(stack) > 0:
-        S = stack.pop()
-        depth = depths.pop()
-        if S.shape[0] < min_size or depth > 64:
+    # Array-based DFS stack. All stacked partitions are pairwise disjoint
+    # (children partition their parent), and pops/pushes are LIFO, so a single
+    # length-N index buffer used as a segment stack never overflows. The popped
+    # segment is copied to S_cur before its space is reused for the children.
+    buf = np.empty(N, np.int64)
+    for i in range(N):
+        buf[i] = i
+    _CAP = 256  # >= 2 * max depth (64) + slack
+    e_start = np.empty(_CAP, np.int64)
+    e_len = np.empty(_CAP, np.int64)
+    e_depth = np.empty(_CAP, np.int64)
+    e_start[0] = 0
+    e_len[0] = N
+    e_depth[0] = 0
+    n_ent = 1
+    S_cur = np.empty(N, np.int64)
+    while n_ent > 0:
+        n_ent -= 1
+        st = e_start[n_ent]
+        ln = e_len[n_ent]
+        depth = e_depth[n_ent]
+        for i in range(ln):
+            S_cur[i] = buf[st + i]
+        top = st  # the popped entry is always the topmost live segment
+        S = S_cur[:ln]
+        if ln < min_size or depth > 64:
             continue
 
         # Forward search (mirrors core._forward_search).
@@ -345,13 +438,14 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
             if not ok:
                 n_plus = -1
                 break
-        if n_plus <= 0 or n_plus >= S.shape[0]:
+        if n_plus <= 0 or n_plus >= S.shape[0] or n_ent >= _CAP - 2:
             continue
-        S_plus = np.empty(n_plus, np.int64)
-        S_minus = np.empty(S.shape[0] - n_plus, np.int64)
-        cp = 0
-        cm = 0
-        for t in range(S.shape[0]):
+        # Write minus segment first, plus segment on top: the plus partition is
+        # then popped first (same order as the recursive NumPy implementation).
+        n_minus = ln - n_plus
+        cp = top + n_minus
+        cm = top
+        for t in range(ln):
             i = S[t]
             r = (pts1[i, 0] * split_H[0, 0] + pts1[i, 1] * split_H[0, 1]
                  + split_H[0, 2]
@@ -359,17 +453,18 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
                                  + pts1[i, 1] * split_H[2, 1]
                                  + split_H[2, 2]))
             if r >= 0.0:
-                S_plus[cp] = i
+                buf[cp] = i
                 cp += 1
             else:
-                S_minus[cm] = i
+                buf[cm] = i
                 cm += 1
-        # Push minus first so plus is processed first (same order as the
-        # recursive NumPy implementation).
-        stack.append(S_minus)
-        depths.append(depth + 1)
-        stack.append(S_plus)
-        depths.append(depth + 1)
+        e_start[n_ent] = top
+        e_len[n_ent] = n_minus
+        e_depth[n_ent] = depth + 1
+        e_start[n_ent + 1] = top + n_minus
+        e_len[n_ent + 1] = n_plus
+        e_depth[n_ent + 1] = depth + 1
+        n_ent += 2
 
     if g_inl < 0:
         return g_H, False
@@ -400,3 +495,24 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
         if inl > g_inl or (inl == g_inl and ms > g_msac):
             g_inl, g_msac, g_H = inl, ms, H.copy()
     return g_H, True
+
+
+@njit(cache=True, parallel=True)
+def search_batch(pts1, pts2, offsets, T_sq, dp, p_min, ks):
+    """Run the full pipeline for many pairs in parallel (one prange lane per
+    pair). Pairs are packed into flat (M, 2) arrays; pair i spans rows
+    offsets[i]:offsets[i+1]. Per-pair results are independent of thread
+    scheduling, so the batch is exactly as deterministic as single calls."""
+    n_pairs = offsets.shape[0] - 1
+    Hs = np.zeros((n_pairs, 3, 3))
+    found = np.zeros(n_pairs, np.uint8)
+    for ip in prange(n_pairs):
+        a = offsets[ip]
+        b = offsets[ip + 1]
+        if b - a < MIN_PTS:
+            continue
+        H, ok = search(pts1[a:b], pts2[a:b], T_sq, dp, p_min, ks)
+        if ok:
+            Hs[ip] = H
+            found[ip] = 1
+    return Hs, found

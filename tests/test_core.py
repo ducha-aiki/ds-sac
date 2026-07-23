@@ -150,3 +150,42 @@ def test_find_homography_rejects_wrong_shape():
         dssac.find_homography(bad, bad)
     with pytest.raises(ValueError):
         dssac.find_homography(good, np.zeros((11, 2)))
+
+
+@pytest.mark.skipif(dssac.core._fast is None, reason="numba not installed")
+def test_eigh9_matches_numpy():
+    from dssac._fast import _eigh9
+    rng = np.random.default_rng(0)
+    for _ in range(50):
+        A = rng.normal(size=(20, 9))
+        ata = A.T @ A
+        w, V = _eigh9(ata)
+        w_np = np.linalg.eigvalsh(ata)
+        assert np.all(np.diff(w) >= 0)
+        assert np.allclose(w, w_np, rtol=1e-9, atol=1e-9 * abs(w_np[-1]))
+        # eigenpair property for the vector we actually use (smallest)
+        assert np.allclose(ata @ V[:, 0], w[0] * V[:, 0],
+                           atol=1e-8 * abs(w_np[-1]))
+
+
+@pytest.mark.skipif(dssac.core._fast is None, reason="numba not installed")
+def test_find_homographies_batch_matches_single():
+    scenes = [make_scene(100, n_out, noise=0.5, seed=s)
+              for s, n_out in [(0, 50), (1, 100), (2, 200), (3, 20), (4, 0)]]
+    batch = dssac.find_homographies([s[0] for s in scenes],
+                                    [s[1] for s in scenes], threshold=2.0)
+    for (pts1, pts2, _), (Hb, mb) in zip(scenes, batch):
+        Hs, ms = dssac.find_homography(pts1, pts2, threshold=2.0,
+                                       backend="numba")
+        assert np.array_equal(Hb, Hs)
+        assert np.array_equal(mb, ms)
+
+
+@pytest.mark.skipif(dssac.core._fast is None, reason="numba not installed")
+def test_find_homographies_handles_failures_and_empty():
+    assert dssac.find_homographies([], []) == []
+    pts1, pts2, _ = make_scene(100, 50, noise=0.5, seed=0)
+    tiny = np.zeros((3, 2))
+    out = dssac.find_homographies([tiny, pts1], [tiny, pts2], threshold=2.0)
+    assert out[0] == (None, None)
+    assert out[1][0] is not None

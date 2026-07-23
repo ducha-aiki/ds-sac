@@ -10,9 +10,7 @@ requires-python = ">=3.10"
 dependencies = ["numpy"]
 
 [project.optional-dependencies]
-# scipy is not imported by dssac itself, but numba's np.linalg.eigh lowering
-# requires scipy's cython_lapack bindings at JIT-compile time.
-fast = ["numba", "scipy"]
+fast = ["numba"]
 
 [tool.setuptools]
 packages = ["dssac"]
