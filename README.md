@@ -18,10 +18,11 @@ pass refits the global-best model on inlier sets at relaxed-to-strict thresholds
 ## Install
 
 ```bash
-pip install -e .
+pip install -e .          # pure NumPy (the only runtime dependency)
+pip install -e ".[fast]"  # + numba/scipy fast backend, ~9x faster
 ```
 
-Runtime dependency: `numpy` only. Requires Python >= 3.10.
+Requires Python >= 3.10.
 
 ## Usage
 
@@ -43,6 +44,11 @@ Parameters:
   partition a recursive split must retain to be searched further.
 - `post_tuning_ks` (default `(3, 2, 1.5, 1)`): multipliers of `threshold` used by the
   relaxed-to-strict post-tuning refit chain.
+- `backend` (default `"auto"`): `"numba"` (fused nopython kernels, used automatically when
+  numba is installed; ~2–4 ms/pair on the benchmark data after a one-off JIT compile) or
+  `"numpy"` (dependency-free, ~20 ms/pair). Both are deterministic; they can differ in the
+  last floating-point bits, which on bifurcation-sensitive pairs may select a different
+  (equally valid) local optimum.
 
 The estimator is fully deterministic: the same inputs always produce the same output, with no
 random sampling and nothing to seed.
@@ -84,18 +90,21 @@ Best-per-method rows (highest mAA across the threshold sweep), from `results/rep
 Best per method (EVD):
 | method | th (px) | mAA | median err | mean time (s) |
 |---|---|---|---|---|
-| cv2-magsac | 0.5 | 0.5857 | 4.24 | 0.0017 |
-| dssac | 1.0 | 0.5000 | 4.73 | 0.0177 |
-| cv2-ransac | 4.0 | 0.4286 | 5.14 | 0.0126 |
-| pydegensac | 1.0 | 0.4143 | 5.08 | 0.0029 |
+| cv2-magsac | 0.5 | 0.5857 | 4.24 | 0.0011 |
+| dssac | 1.0 | 0.5000 | 4.73 | 0.0018 |
+| cv2-ransac | 4.0 | 0.4286 | 5.14 | 0.0125 |
+| pydegensac | 2.0 | 0.4286 | 4.73 | 0.0024 |
 
 Best per method (HPatchesSeq):
 | method | th (px) | mAA | median err | mean time (s) |
 |---|---|---|---|---|
-| cv2-magsac | 0.5 | 0.9152 | 0.50 | 0.0023 |
-| cv2-ransac | 4.0 | 0.8786 | 0.69 | 0.0059 |
-| dssac | 4.0 | 0.8290 | 0.63 | 0.0303 |
-| pydegensac | 0.5 | 0.7276 | 1.51 | 0.0068 |
+| cv2-magsac | 0.5 | 0.9152 | 0.50 | 0.0022 |
+| cv2-ransac | 4.0 | 0.8786 | 0.69 | 0.0058 |
+| dssac | 4.0 | 0.8441 | 0.60 | 0.0035 |
+| pydegensac | 1.0 | 0.7428 | 1.64 | 0.0034 |
+
+(DS-SAC timings use the numba backend; the pure-NumPy backend is ~9x slower at equal or
+marginally different accuracy — see Implementation notes.)
 
 Full per-threshold tables are in `results/report.md` (regenerated locally, not tracked in git).
 
@@ -109,22 +118,23 @@ then inlier threshold re-tuned at that SNN), from `bench/tune_snn.py`:
 | EVD | cv2-magsac | 0.5 | 0.5857 | 1.0 | 0.5857 | 0.5 | 0.5857 |
 | EVD | cv2-ransac | 4.0 | 0.4286 | 0.75 | 0.5571 | 4.0 | 0.5571 |
 | EVD | dssac | 1.0 | 0.5000 | 1.0 | 0.5000 | 1.0 | 0.5000 |
-| EVD | pydegensac | 1.0 | 0.4286 | 0.7 | 0.5000 | 0.75 | 0.5714 |
+| EVD | pydegensac | 1.0 | 0.4143 | 0.8 | 0.4714 | 1.0 | 0.4714 |
 | HPatchesSeq | cv2-magsac | 0.5 | 0.9152 | 0.85 | 0.9166 | 0.5 | 0.9166 |
 | HPatchesSeq | cv2-ransac | 4.0 | 0.8786 | 0.7 | 0.8807 | 4.0 | 0.8807 |
-| HPatchesSeq | dssac | 4.0 | 0.8290 | 0.85 | 0.8441 | 4.0 | 0.8441 |
-| HPatchesSeq | pydegensac | 1.0 | 0.7083 | 0.85 | 0.7255 | 0.5 | 0.7276 |
+| HPatchesSeq | dssac | 4.0 | 0.8441 | 0.85 | 0.8586 | 4.0 | 0.8586 |
+| HPatchesSeq | pydegensac | 0.75 | 0.7345 | 1.0 | 0.7345 | 0.75 | 0.7345 |
 
-Takeaways: SNN tuning matters most on EVD, where it lifts pydegensac from 0.43 to **0.57**
-(ahead of DS-SAC's 0.50) and cv2-RANSAC to 0.56; DS-SAC's own optimum on EVD is *no extra
-filtering* — it prefers to see all the correspondences and reject outliers itself. On
-HPatchesSeq the gains are small for every method (the shipped 0.85 pre-filter is already close
-to optimal there).
+Takeaways: SNN tuning matters most on EVD, where it consistently lifts the stochastic
+baselines (cv2-RANSAC 0.43 → 0.56 here; pydegensac gained between 0.06 and 0.14 across our
+runs — on 7 pairs the unseeded baselines vary noticeably run to run, so treat individual EVD
+cells as noisy). DS-SAC's own optimum on EVD is *no extra filtering* — it prefers to see all
+the correspondences and reject outliers itself. On HPatchesSeq the gains are small for every
+method (the shipped 0.85 pre-filter is already close to optimal there).
 
 Caveats:
 
-- DS-SAC here is pure NumPy while all three baselines are compiled C++ (OpenCV, pydegensac); the
-  runtime column is indicative only, not an apples-to-apples speed comparison.
+- DS-SAC timings use the numba backend (JIT-compiled, roughly the same league as the C++
+  baselines); the pure-NumPy backend is ~9x slower. JIT compilation (~5 s, cached) is excluded.
 - The archive's tentative correspondences are already SNN-pre-filtered at ≈ 0.85, so the default
   protocol is not a truly unfiltered regime; the SNN-filtered protocol above tunes the ratio
   further per method.
@@ -143,10 +153,9 @@ Each point is one compute budget — `maxIters` 10–6400 for the RANSAC-family 
 step `dp` 0.3–0.015 for DS-SAC (its natural budget knob, since it is deterministic and has no
 iteration cap) — with x = measured mean runtime per pair and y = the method's best mAA over the
 inlier-threshold sweep at that budget. Top row: correspondences as shipped (SNN ≤ 0.85); bottom
-row: each method at its tuned SNN threshold from `results/best_snn.json`. DS-SAC's runtime is
-flat across inlier thresholds (no confidence-based early exit) and its cheap-budget end is
-bounded below by the partition-tree overhead, so its curve spans a narrower time range than the
-iteration-capped baselines.
+row: each method at its tuned SNN threshold from `results/best_snn.json`. DS-SAC (numba
+backend) now occupies the same time range as the compiled baselines; its runtime is flat
+across inlier thresholds since it has no confidence-based early exit.
 
 Reproduce:
 
@@ -171,6 +180,24 @@ Two points where the paper is underspecified are resolved here as documented ass
   refit (as opposed to the percentile-set refit) is only carried forward into the next round if
   it strictly improves the best-so-far score for that search; otherwise the percentile-refit
   model is kept.
+
+### Performance
+
+Two interchangeable backends implement the identical algorithm:
+
+- **numpy** (`dssac/core.py` + `dssac/homography.py`): dependency-free reference,
+  ~20 ms/pair on the benchmark data (N ≈ 500–1400).
+- **numba** (`dssac/_fast.py`, `pip install dssac[fast]`): the whole pipeline — moment-form
+  normal equations + 9x9 `eigh` for each DLT fit, fused residual/score loops, O(N) percentile
+  selection via `np.partition`, explicit-stack recursive partitioning, post-tuning — as
+  `@njit(cache=True)` kernels: ~2–4 ms/pair, ~9x faster. First call pays ~5 s of JIT
+  compilation (cached on disk afterwards).
+
+Both are deterministic. They may differ in the last floating-point bits (summation order,
+selection tie-breaks), which on a few bifurcation-sensitive pairs flips the search into a
+different local optimum — in our benchmark this slightly *helped* the numba backend
+(HPatchesSeq mAA 0.844 vs 0.829, EVD identical). `bench/perf_check.py` maintains per-backend
+golden outputs for exact regression checks.
 
 See `docs/superpowers/specs/2026-07-23-dssac-homography-design.md` for the full design spec and
 `docs/superpowers/plans/2026-07-23-dssac-homography.md` for the step-by-step implementation plan
