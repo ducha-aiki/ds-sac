@@ -29,12 +29,13 @@ def corner_err(Ha, Hb, w=1000, h=1000):
     return np.abs(pa[:, :2] / pa[:, 2:] - pb[:, :2] / pb[:, 2:]).max()
 
 
-def run():
+def run(backend):
     out, times = {}, []
     for ds, n in (("HPatchesSeq", N_HP), ("EVD", N_EVD)):
         for pair in list(iter_pairs(ds))[:n]:
             t0 = time.perf_counter()
-            H, _ = dssac.find_homography(pair["pts1"], pair["pts2"], THRESHOLD)
+            H, _ = dssac.find_homography(pair["pts1"], pair["pts2"], THRESHOLD,
+                                         backend=backend)
             times.append(time.perf_counter() - t0)
             out[f"{ds}/{pair['name']}"] = H if H is not None else np.full((3, 3), np.nan)
     return out, float(np.mean(times)), float(np.median(times))
@@ -45,10 +46,14 @@ def main():
     ap.add_argument("--save", action="store_true")
     ap.add_argument("--tol", type=float, default=0.0,
                     help="allowed max corner error vs golden (0 = exact match)")
+    ap.add_argument("--backend", default="auto",
+                    help="dssac backend; goldens are only comparable per backend")
     ap.add_argument("--golden", default="results/golden.npz")
     args = ap.parse_args()
 
-    out, mean_t, med_t = run()
+    if args.backend == "numba":
+        run(args.backend)  # warm up JIT outside the timed pass
+    out, mean_t, med_t = run(args.backend)
     print(f"{len(out)} pairs: mean {mean_t*1000:.2f} ms, median {med_t*1000:.2f} ms")
 
     path = ROOT / args.golden

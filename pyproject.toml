@@ -9,5 +9,8 @@ description = "DS-SAC: Density Search for Sample Consensus (homography), NumPy i
 requires-python = ">=3.10"
 dependencies = ["numpy"]
 
+[project.optional-dependencies]
+fast = ["numba", "scipy"]
+
 [tool.setuptools]
 packages = ["dssac"]

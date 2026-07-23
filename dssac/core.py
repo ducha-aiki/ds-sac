@@ -133,8 +133,14 @@ def _post_tune(pts1, pts2, glob, T_sq, ks):
             glob.score, glob.H = sc, H
 
 
+try:
+    from . import _fast
+except ImportError:  # numba not installed — NumPy path only
+    _fast = None
+
+
 def find_homography(pts1, pts2, threshold=0.54, dp=0.03, p_min=0.2,
-                    post_tuning_ks=(3.0, 2.0, 1.5, 1.0)):
+                    post_tuning_ks=(3.0, 2.0, 1.5, 1.0), backend="auto"):
     """Estimate a homography pts1 -> pts2 with DS-SAC.
 
     Args:
@@ -143,6 +149,9 @@ def find_homography(pts1, pts2, threshold=0.54, dp=0.03, p_min=0.2,
         dp: percentile step of the forward/backward search.
         p_min: minimum percentile / minimum partition size fraction.
         post_tuning_ks: relaxed-to-strict multipliers of `threshold`.
+        backend: "auto" (numba when available), "numba", or "numpy". Both
+            backends are deterministic; they may differ in the last floating-
+            point bits of the result.
 
     Returns:
         (H, mask): 3x3 array with H[2,2] == 1 and boolean inlier mask,
@@ -154,13 +163,27 @@ def find_homography(pts1, pts2, threshold=0.54, dp=0.03, p_min=0.2,
         raise ValueError("pts1 and pts2 must both have shape (N, 2)")
     if len(pts1) < MIN_PTS:
         return None, None
+    if backend == "auto":
+        backend = "numba" if _fast is not None else "numpy"
     T_sq = float(threshold) ** 2
-    glob = _Best()
-    _search_partition(pts1, pts2, np.arange(len(pts1)), T_sq, dp, p_min, glob)
-    if glob.H is None:
-        return None, None
-    _post_tune(pts1, pts2, glob, T_sq, post_tuning_ks)
-    H = glob.H
+
+    if backend == "numba":
+        if _fast is None:
+            raise RuntimeError("numba backend requested but numba is not installed")
+        H, found = _fast.search(pts1, pts2, T_sq, float(dp), float(p_min),
+                                np.asarray(post_tuning_ks, dtype=np.float64))
+        if not found:
+            return None, None
+    elif backend == "numpy":
+        glob = _Best()
+        _search_partition(pts1, pts2, np.arange(len(pts1)), T_sq, dp, p_min, glob)
+        if glob.H is None:
+            return None, None
+        _post_tune(pts1, pts2, glob, T_sq, post_tuning_ks)
+        H = glob.H
+    else:
+        raise ValueError(f"unknown backend: {backend!r}")
+
     if abs(H[2, 2]) > 1e-12:
         H = H / H[2, 2]
     mask = transfer_error_sq(H, pts1, pts2) <= T_sq
