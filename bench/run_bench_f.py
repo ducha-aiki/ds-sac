@@ -48,12 +48,13 @@ def main():
               for snn in args.snn:
                 keep = pair["scores"] <= snn
                 pts1, pts2 = pair["pts1"][keep], pair["pts2"][keep]
+                sc_keep = pair["scores"][keep]
                 corr = np.hstack([pts1, pts2])
                 for m in args.methods:
                     for th in THRESHOLDS_F:
                         t0 = time.perf_counter()
                         try:
-                            F, mask = F_METHODS[m](pts1, pts2, th)
+                            F, mask = F_METHODS[m](pts1, pts2, th, sc_keep)
                         except Exception as exc:
                             print(f"{m} raised on {scene}/{pair['name']} "
                                   f"th={th}: {exc}", file=sys.stderr)

@@ -1,16 +1,28 @@
-"""Uniform F-estimation wrappers: fn(pts1, pts2, threshold_px) -> (F | None, mask)."""
+"""Uniform F-estimation wrappers: fn(pts1, pts2, threshold_px, scores=None)
+-> (F | None, mask). `scores` are SNN ratios (lower = better); only PROSAC-based
+methods use them, everyone else ignores the argument."""
+import sys
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pydegensac
 
 import dssac
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "data" / "rb2025"))
+try:
+    from ransac_benchmark_imc.vibesac import \
+        ransac_fundamental_loransac_numba_refactored as _vibesac
+except ImportError:
+    _vibesac = None
+
 MAX_ITERS = 2000
 CONF = 0.999
 
 
 def _cv2_f_method(flag):
-    def run(pts1, pts2, th):
+    def run(pts1, pts2, th, scores=None):
         F, mask = cv2.findFundamentalMat(pts1, pts2, flag, th,
                                          confidence=CONF, maxIters=MAX_ITERS)
         if F is None:
@@ -19,21 +31,42 @@ def _cv2_f_method(flag):
     return run
 
 
-def run_dssac_f(pts1, pts2, th):
+def run_dssac_f(pts1, pts2, th, scores=None):
     return dssac.find_fundamental(pts1, pts2, threshold=th)
 
 
-def run_dssac_f_pmin01(pts1, pts2, th):
+def run_dssac_f_pmin01(pts1, pts2, th, scores=None):
     # Lower partition/percentile floor: tolerates inlier ratios down to ~10%
     # at the cost of a deeper search tree.
     return dssac.find_fundamental(pts1, pts2, threshold=th, p_min=0.1)
 
 
-def run_pydegensac_f(pts1, pts2, th):
+def run_pydegensac_f(pts1, pts2, th, scores=None):
     F, mask = pydegensac.findFundamentalMatrix(pts1, pts2, th, CONF, MAX_ITERS)
     if F is None:
         return None, np.zeros(len(pts1), bool)
     return F, np.asarray(mask, bool)
+
+
+def _vibesac_method(max_trials=MAX_ITERS):
+    def run(pts1, pts2, th, scores=None):
+        # PROSAC assumes quality-ordered input: sort by SNN ratio ascending
+        # (best first) and map the returned mask back to the input order.
+        if scores is not None:
+            order = np.argsort(scores, kind="stable")
+        else:
+            order = np.arange(len(pts1))
+        F, inl, n_inl, _score, _trials = _vibesac(
+            np.ascontiguousarray(pts1[order]),
+            np.ascontiguousarray(pts2[order]),
+            th, min_samples=7, max_trials=max_trials, p_success=CONF,
+            use_prosac=scores is not None)
+        if F is None or n_inl < 8 or not np.any(F):
+            return None, np.zeros(len(pts1), bool)
+        mask = np.zeros(len(pts1), bool)
+        mask[order] = inl.astype(bool)
+        return F, mask
+    return run
 
 
 F_METHODS = {
@@ -43,6 +76,8 @@ F_METHODS = {
     "cv2-ransac": _cv2_f_method(cv2.FM_RANSAC),
     "cv2-magsac": _cv2_f_method(cv2.USAC_MAGSAC),
 }
+if _vibesac is not None:
+    F_METHODS["vibesac"] = _vibesac_method()
 
 
 def _dssac_f_budget(p_min):
