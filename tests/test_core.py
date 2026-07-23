@@ -80,7 +80,7 @@ def test_backward_search_sweeps_expected_percentile_range(monkeypatch):
     local.p = 0.2
     seen = []
 
-    def fake_refine(pts1_, pts2_, S_, H, d2, p, T_sq, local_, glob_):
+    def fake_refine(pts1_, pts2_, S_, H, d2, p, T_sq, local_, glob_, model_):
         seen.append(p)
         return H, d2
 
@@ -153,13 +153,13 @@ def test_find_homography_rejects_wrong_shape():
 
 
 @pytest.mark.skipif(dssac.core._fast is None, reason="numba not installed")
-def test_eigh9_matches_numpy():
-    from dssac._fast import _eigh9
+def test_jacobi_eigh_matches_numpy():
+    from dssac._fast import _jacobi_eigh
     rng = np.random.default_rng(0)
     for _ in range(50):
         A = rng.normal(size=(20, 9))
         ata = A.T @ A
-        w, V = _eigh9(ata)
+        w, V = _jacobi_eigh(ata)
         w_np = np.linalg.eigvalsh(ata)
         assert np.all(np.diff(w) >= 0)
         assert np.allclose(w, w_np, rtol=1e-9, atol=1e-9 * abs(w_np[-1]))

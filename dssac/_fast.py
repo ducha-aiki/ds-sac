@@ -11,18 +11,18 @@ NumPy path.
 import numpy as np
 from numba import njit, prange
 
+from .fundamental import MIN_PTS_F
 from .homography import MIN_PTS
 
 
 @njit(cache=True)
-def _eigh9(A):
-    """Eigendecomposition of a symmetric 9x9 matrix by cyclic Jacobi rotations.
-
-    Returns (w, V) with eigenvalues ascending and eigenvectors in columns,
-    like np.linalg.eigh, but without the scipy/LAPACK dependency. Deterministic;
-    converges quadratically (a handful of sweeps for 9x9).
+def _jacobi_eigh(A):
+    """Eigendecomposition of a small symmetric matrix by cyclic Jacobi
+    rotations. Returns (w, V) with eigenvalues ascending and eigenvectors in
+    columns, like np.linalg.eigh, but without the scipy/LAPACK dependency.
+    Deterministic; converges quadratically for the 3x3/9x9 sizes used here.
     """
-    n = 9
+    n = A.shape[0]
     a = A.copy()
     V = np.eye(n)
     for _sweep in range(50):
@@ -88,12 +88,13 @@ def _eigh9(A):
 
 
 @njit(cache=True)
-def _fit(pts1, pts2, idx):
-    """Hartley-normalized least-squares DLT on the subset `idx`.
-    Returns (H, ok)."""
+def _fit(pts1, pts2, idx, kind):
+    """Hartley-normalized least-squares fit on the subset `idx`: DLT homography
+    (kind == 0) or rank-2-enforced 8-point fundamental matrix (kind == 1).
+    Returns (M, ok)."""
     n = idx.shape[0]
     H = np.zeros((3, 3))
-    if n < MIN_PTS:
+    if n < (MIN_PTS if kind == 0 else MIN_PTS_F):
         return H, False
     cx1 = 0.0
     cy1 = 0.0
@@ -125,6 +126,68 @@ def _fit(pts1, pts2, idx):
         return H, False
     s1 = np.sqrt(2.0) / m1
     s2 = np.sqrt(2.0) / m2
+
+    if kind == 1:
+        # 8-point algorithm: rows a = [x2x1, x2y1, x2, y2x1, y2y1, y2, x1, y1, 1]
+        ata = np.zeros((9, 9))
+        row = np.empty(9)
+        for t in range(n):
+            i = idx[t]
+            x1 = s1 * (pts1[i, 0] - cx1)
+            y1 = s1 * (pts1[i, 1] - cy1)
+            x2 = s2 * (pts2[i, 0] - cx2)
+            y2 = s2 * (pts2[i, 1] - cy2)
+            row[0] = x2 * x1
+            row[1] = x2 * y1
+            row[2] = x2
+            row[3] = y2 * x1
+            row[4] = y2 * y1
+            row[5] = y2
+            row[6] = x1
+            row[7] = y1
+            row[8] = 1.0
+            for a in range(9):
+                ra = row[a]
+                for b in range(a, 9):
+                    ata[a, b] += ra * row[b]
+        for a in range(9):
+            for b in range(a):
+                ata[a, b] = ata[b, a]
+        w, V = _jacobi_eigh(ata)
+        wmax = w[8] if w[8] > 1.0 else 1.0
+        if w[1] < 1e-9 * wmax:
+            return H, False
+        Fn = np.ascontiguousarray(V[:, 0]).reshape(3, 3)
+        # Rank-2 enforcement: project out the right null direction v0 of Fn
+        # (smallest eigenvector of Fn^T Fn): Fn (I - v0 v0^T).
+        wf, Vf = _jacobi_eigh(Fn.T @ Fn)
+        v0 = Vf[:, 0]
+        Fv = Fn @ v0
+        for a in range(3):
+            for b in range(3):
+                Fn[a, b] -= Fv[a] * v0[b]
+        # Denormalize: F = T2^T Fn T1 for row similarities T = [sI, -s c; 0 1].
+        T1 = np.zeros((3, 3))
+        T1[0, 0] = s1
+        T1[0, 2] = -s1 * cx1
+        T1[1, 1] = s1
+        T1[1, 2] = -s1 * cy1
+        T1[2, 2] = 1.0
+        T2 = np.zeros((3, 3))
+        T2[0, 0] = s2
+        T2[0, 2] = -s2 * cx2
+        T2[1, 1] = s2
+        T2[1, 2] = -s2 * cy2
+        T2[2, 2] = 1.0
+        F = T2.T @ (Fn @ T1)
+        nrm = 0.0
+        for a in range(3):
+            for b in range(3):
+                nrm += F[a, b] * F[a, b]
+        nrm = np.sqrt(nrm)
+        if not np.isfinite(nrm) or nrm < 1e-12:
+            return H, False
+        return F / nrm, True
 
     # A^T A in closed form from point moments (branch-free): with normalized
     # coordinates (u, v) -> (u', v'), the stacked DLT rows are
@@ -210,7 +273,7 @@ def _fit(pts1, pts2, idx):
         for b in range(a):
             ata[a, b] = ata[b, a]
 
-    w, V = _eigh9(ata)
+    w, V = _jacobi_eigh(ata)
     wmax = w[8] if w[8] > 1.0 else 1.0
     if w[1] < 1e-9 * wmax:
         return H, False
@@ -238,19 +301,34 @@ def _fit(pts1, pts2, idx):
 
 
 @njit(cache=True)
-def _residuals(H, pts1, pts2):
-    """Squared one-way transfer error per point, sign-preserving den clamp."""
+def _residuals(M, pts1, pts2, kind):
+    """Per-point squared residual: one-way transfer error for homographies
+    (kind == 0, sign-preserving den clamp) or Sampson distance for fundamental
+    matrices (kind == 1)."""
     N = pts1.shape[0]
     d2 = np.empty(N)
-    for i in range(N):
-        den = pts1[i, 0] * H[2, 0] + pts1[i, 1] * H[2, 1] + H[2, 2]
-        if den > -1e-12 and den < 1e-12:
-            den = 1e-12 if den >= 0.0 else -1e-12
-        x = (pts1[i, 0] * H[0, 0] + pts1[i, 1] * H[0, 1] + H[0, 2]) / den
-        y = (pts1[i, 0] * H[1, 0] + pts1[i, 1] * H[1, 1] + H[1, 2]) / den
-        dx = x - pts2[i, 0]
-        dy = y - pts2[i, 1]
-        d2[i] = dx * dx + dy * dy
+    if kind == 0:
+        for i in range(N):
+            den = pts1[i, 0] * M[2, 0] + pts1[i, 1] * M[2, 1] + M[2, 2]
+            if den > -1e-12 and den < 1e-12:
+                den = 1e-12 if den >= 0.0 else -1e-12
+            x = (pts1[i, 0] * M[0, 0] + pts1[i, 1] * M[0, 1] + M[0, 2]) / den
+            y = (pts1[i, 0] * M[1, 0] + pts1[i, 1] * M[1, 1] + M[1, 2]) / den
+            dx = x - pts2[i, 0]
+            dy = y - pts2[i, 1]
+            d2[i] = dx * dx + dy * dy
+    else:
+        for i in range(N):
+            f1 = M[0, 0] * pts1[i, 0] + M[0, 1] * pts1[i, 1] + M[0, 2]
+            f2 = M[1, 0] * pts1[i, 0] + M[1, 1] * pts1[i, 1] + M[1, 2]
+            f3 = M[2, 0] * pts1[i, 0] + M[2, 1] * pts1[i, 1] + M[2, 2]
+            g1 = M[0, 0] * pts2[i, 0] + M[1, 0] * pts2[i, 1] + M[2, 0]
+            g2 = M[0, 1] * pts2[i, 0] + M[1, 1] * pts2[i, 1] + M[2, 1]
+            num = pts2[i, 0] * f1 + pts2[i, 1] * f2 + f3
+            den = f1 * f1 + f2 * f2 + g1 * g1 + g2 * g2
+            if den < 1e-15:
+                den = 1e-15
+            d2[i] = num * num / den
     return d2
 
 
@@ -288,7 +366,7 @@ def _select_k(dS, S, k):
 
 
 @njit(cache=True)
-def _round(pts1, pts2, S, H, d2, p, T_sq,
+def _round(pts1, pts2, S, H, d2, p, T_sq, kind, mp,
            l_inl, l_msac, l_H, l_p, g_inl, g_msac, g_H):
     """One percentile + inlier optimization round (mirrors core._refine_round).
     Returns the updated carried state and best trackers."""
@@ -298,15 +376,15 @@ def _round(pts1, pts2, S, H, d2, p, T_sq,
     for t in range(ns):
         dS[t] = d2[S[t]]
     k = int(np.ceil(p * N))
-    if k < MIN_PTS:
-        k = MIN_PTS
+    if k < mp:
+        k = mp
     if k > ns:
         k = ns
     sel = S if k == ns else _select_k(dS, S, k)
-    Hp, ok = _fit(pts1, pts2, sel)
+    Hp, ok = _fit(pts1, pts2, sel, kind)
     if ok:
         H = Hp
-        d2 = _residuals(H, pts1, pts2)
+        d2 = _residuals(H, pts1, pts2, kind)
         inl, ms = _msac(d2, T_sq)
         if inl > l_inl or (inl == l_inl and ms > l_msac):
             l_inl, l_msac, l_H, l_p = inl, ms, H.copy(), p
@@ -319,7 +397,7 @@ def _round(pts1, pts2, S, H, d2, p, T_sq,
     for t in range(ns):
         if dS[t] <= T_sq:
             cnt += 1
-    if cnt >= MIN_PTS:
+    if cnt >= mp:
         supp = np.empty(cnt, np.int64)
         c = 0
         for t in range(ns):
@@ -327,10 +405,10 @@ def _round(pts1, pts2, S, H, d2, p, T_sq,
                 supp[c] = S[t]
                 c += 1
     else:
-        supp = _select_k(dS, S, MIN_PTS)
-    Hi, ok = _fit(pts1, pts2, supp)
+        supp = _select_k(dS, S, mp)
+    Hi, ok = _fit(pts1, pts2, supp, kind)
     if ok:
-        di = _residuals(Hi, pts1, pts2)
+        di = _residuals(Hi, pts1, pts2, kind)
         inl, ms = _msac(di, T_sq)
         prev_inl = l_inl
         prev_ms = l_msac
@@ -344,16 +422,18 @@ def _round(pts1, pts2, S, H, d2, p, T_sq,
 
 
 @njit(cache=True)
-def search(pts1, pts2, T_sq, dp, p_min, ks):
-    """Full DS-SAC pipeline (forward, backward, partitioning, post-tuning).
-    Returns (H, found)."""
+def search(pts1, pts2, T_sq, dp, p_min, ks, kind):
+    """Full DS-SAC pipeline (forward, backward, partitioning, post-tuning) for
+    homographies (kind == 0) or fundamental matrices (kind == 1).
+    Returns (M, found)."""
     N = pts1.shape[0]
+    mp = MIN_PTS if kind == 0 else MIN_PTS_F
     g_inl = -1
     g_msac = -1e300
     g_H = np.zeros((3, 3))
     min_size = int(np.ceil(p_min * N))
-    if min_size < MIN_PTS:
-        min_size = MIN_PTS
+    if min_size < mp:
+        min_size = mp
 
     # Array-based DFS stack. All stacked partitions are pairwise disjoint
     # (children partition their parent), and pops/pushes are LIFO, so a single
@@ -387,11 +467,11 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
             continue
 
         # Forward search (mirrors core._forward_search).
-        H, ok = _fit(pts1, pts2, S)
+        H, ok = _fit(pts1, pts2, S, kind)
         if not ok:
             continue
         p_part = S.shape[0] / N
-        d2 = _residuals(H, pts1, pts2)
+        d2 = _residuals(H, pts1, pts2, kind)
         inl, ms = _msac(d2, T_sq)
         l_inl, l_msac, l_H, l_p = inl, ms, H.copy(), p_part
         if inl > g_inl or (inl == g_inl and ms > g_msac):
@@ -400,7 +480,7 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
         p = p_part
         while p > p_min - 1e-9:
             H, d2, l_inl, l_msac, l_H, l_p, g_inl, g_msac, g_H = _round(
-                pts1, pts2, S, H, d2, p, T_sq,
+                pts1, pts2, S, H, d2, p, T_sq, kind, mp,
                 l_inl, l_msac, l_H, l_p, g_inl, g_msac, g_H)
             t += 1
             p = p_part - t * dp
@@ -408,13 +488,13 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
         # Backward search (mirrors core._backward_search).
         p_bwd = 0.5 * p_part
         H = l_H.copy()
-        d2 = _residuals(H, pts1, pts2)
+        d2 = _residuals(H, pts1, pts2, kind)
         p0 = l_p + dp
         t = 0
         p = p0
         while p < p_bwd + 1e-9:
             H, d2, l_inl, l_msac, l_H, l_p, g_inl, g_msac, g_H = _round(
-                pts1, pts2, S, H, d2, p, T_sq,
+                pts1, pts2, S, H, d2, p, T_sq, kind, mp,
                 l_inl, l_msac, l_H, l_p, g_inl, g_msac, g_H)
             t += 1
             p = p0 + t * dp
@@ -425,11 +505,20 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
             n_plus = 0
             for t in range(S.shape[0]):
                 i = S[t]
-                r = (pts1[i, 0] * split_H[0, 0] + pts1[i, 1] * split_H[0, 1]
-                     + split_H[0, 2]
-                     - pts2[i, 0] * (pts1[i, 0] * split_H[2, 0]
-                                     + pts1[i, 1] * split_H[2, 1]
-                                     + split_H[2, 2]))
+                if kind == 0:
+                    r = (pts1[i, 0] * split_H[0, 0] + pts1[i, 1] * split_H[0, 1]
+                         + split_H[0, 2]
+                         - pts2[i, 0] * (pts1[i, 0] * split_H[2, 0]
+                                         + pts1[i, 1] * split_H[2, 1]
+                                         + split_H[2, 2]))
+                else:
+                    f1 = (split_H[0, 0] * pts1[i, 0]
+                          + split_H[0, 1] * pts1[i, 1] + split_H[0, 2])
+                    f2 = (split_H[1, 0] * pts1[i, 0]
+                          + split_H[1, 1] * pts1[i, 1] + split_H[1, 2])
+                    f3 = (split_H[2, 0] * pts1[i, 0]
+                          + split_H[2, 1] * pts1[i, 1] + split_H[2, 2])
+                    r = pts2[i, 0] * f1 + pts2[i, 1] * f2 + f3
                 if r >= 0.0:
                     n_plus += 1
             if 0 < n_plus < S.shape[0]:
@@ -437,7 +526,7 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
             if attempt == 1:
                 n_plus = -1
                 break
-            split_H, ok = _fit(pts1, pts2, S)
+            split_H, ok = _fit(pts1, pts2, S, kind)
             if not ok:
                 n_plus = -1
                 break
@@ -450,11 +539,20 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
         cm = top
         for t in range(ln):
             i = S[t]
-            r = (pts1[i, 0] * split_H[0, 0] + pts1[i, 1] * split_H[0, 1]
-                 + split_H[0, 2]
-                 - pts2[i, 0] * (pts1[i, 0] * split_H[2, 0]
-                                 + pts1[i, 1] * split_H[2, 1]
-                                 + split_H[2, 2]))
+            if kind == 0:
+                r = (pts1[i, 0] * split_H[0, 0] + pts1[i, 1] * split_H[0, 1]
+                     + split_H[0, 2]
+                     - pts2[i, 0] * (pts1[i, 0] * split_H[2, 0]
+                                     + pts1[i, 1] * split_H[2, 1]
+                                     + split_H[2, 2]))
+            else:
+                f1 = (split_H[0, 0] * pts1[i, 0]
+                      + split_H[0, 1] * pts1[i, 1] + split_H[0, 2])
+                f2 = (split_H[1, 0] * pts1[i, 0]
+                      + split_H[1, 1] * pts1[i, 1] + split_H[1, 2])
+                f3 = (split_H[2, 0] * pts1[i, 0]
+                      + split_H[2, 1] * pts1[i, 1] + split_H[2, 2])
+                r = pts2[i, 0] * f1 + pts2[i, 1] * f2 + f3
             if r >= 0.0:
                 buf[cp] = i
                 cp += 1
@@ -476,12 +574,12 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
     H = g_H.copy()
     for ki in range(ks.shape[0]):
         lim = ks[ki] * ks[ki] * T_sq
-        d2 = _residuals(H, pts1, pts2)
+        d2 = _residuals(H, pts1, pts2, kind)
         cnt = 0
         for i in range(N):
             if d2[i] <= lim:
                 cnt += 1
-        if cnt < MIN_PTS:
+        if cnt < mp:
             continue
         sel = np.empty(cnt, np.int64)
         c = 0
@@ -489,11 +587,11 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
             if d2[i] <= lim:
                 sel[c] = i
                 c += 1
-        Hn, ok = _fit(pts1, pts2, sel)
+        Hn, ok = _fit(pts1, pts2, sel, kind)
         if not ok:
             continue
         H = Hn
-        dn = _residuals(H, pts1, pts2)
+        dn = _residuals(H, pts1, pts2, kind)
         inl, ms = _msac(dn, T_sq)
         if inl > g_inl or (inl == g_inl and ms > g_msac):
             g_inl, g_msac, g_H = inl, ms, H.copy()
@@ -501,7 +599,7 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
 
 
 @njit(cache=True, parallel=True)
-def search_batch(pts1, pts2, offsets, T_sq, dp, p_min, ks):
+def search_batch(pts1, pts2, offsets, T_sq, dp, p_min, ks, kind):
     """Run the full pipeline for many pairs in parallel (one prange lane per
     pair). Pairs are packed into flat (M, 2) arrays; pair i spans rows
     offsets[i]:offsets[i+1]. Per-pair results are independent of thread
@@ -512,9 +610,9 @@ def search_batch(pts1, pts2, offsets, T_sq, dp, p_min, ks):
     for ip in prange(n_pairs):
         a = offsets[ip]
         b = offsets[ip + 1]
-        if b - a < MIN_PTS:
+        if b - a < (MIN_PTS if kind == 0 else MIN_PTS_F):
             continue
-        H, ok = search(pts1[a:b], pts2[a:b], T_sq, dp, p_min, ks)
+        H, ok = search(pts1[a:b], pts2[a:b], T_sq, dp, p_min, ks, kind)
         if ok:
             Hs[ip] = H
             found[ip] = 1
