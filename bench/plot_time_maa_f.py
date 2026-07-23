@@ -47,7 +47,9 @@ def main():
     fig, axes = plt.subplots(1, len(scenes), figsize=(7.5 * len(scenes), 5.2),
                              facecolor=PAGE, squeeze=False)
     for ax, sc in zip(axes[0], scenes):
-        draw_panel(ax, curves[sc], f"PhotoTourism {sc} — fundamental matrix")
+        draw_panel(ax, curves[sc], f"PhotoTourism {sc} — fundamental matrix",
+                   stagger={"dssac": None, "pydegensac": -4, "cv2-ransac": 8,
+                            "dssac-pmin0.1": 10})
         ax.set_xlabel("mean time per pair (s, log scale)", color=MUTED, fontsize=9)
     axes[0, 0].set_ylabel("pose mAA (1–10°)", color=MUTED, fontsize=9)
     axes[0, 0].set_ylim(0, 0.5)
@@ -56,11 +58,10 @@ def main():
     fig.suptitle("F estimation: accuracy vs. compute budget",
                  color=INK, fontsize=12.5)
     fig.text(0.5, 0.008,
-             "budget: max iterations 10–6400 (pydegensac, cv2); percentile step "
-             "dp 0.3–0.015 (DS-SAC) · best inlier threshold per point · "
-             "per-method tuned SNN (0.75–0.8)",
+             "budget: max iterations 10–6400 (pydegensac, cv2); percentile step dp 0.3–0.015 (DS-SAC)\n"
+             "best inlier threshold per point · per-method tuned SNN (0.75–0.8)",
              ha="center", fontsize=8, color=MUTED)
-    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
     out = ROOT / args.out
     fig.savefig(out, dpi=200)
     fig.savefig(out.with_suffix(".pdf"))

@@ -222,6 +222,26 @@ Takeaways:
   consistent with its density-search design being more sensitive to the outlier ratio, and
   with it having no dominant-plane degeneracy test (the problem DEGENSAC targets).
 
+### Accuracy vs. compute budget (F)
+
+![F time-mAA curve](assets/time_maa_f.png)
+
+Same construction as the homography figure, at each method's tuned SNN threshold: budget =
+`maxIters` 10–6400 for the RANSAC family, percentile step `dp` 0.3–0.015 for both DS-SAC
+variants; each point reports the best pose mAA over the 0.5–2 px inlier-threshold sweep against
+measured mean runtime. MAGSAC++ dominates; `dssac-pmin0.1` traces the second-best frontier
+(0.27 → 0.31 over 0.7–4.5 ms), staying above pydegensac until pydegensac's largest budgets
+catch up, while cv2-RANSAC needs ~7x more time for comparable accuracy. The default-`p_min`
+DS-SAC curve sits consistently below the `p_min = 0.1` variant — on this data the deeper
+search tree buys more than a finer percentile step does.
+
+Reproduce:
+
+```bash
+.venv/bin/python bench/time_maa_f.py       # writes results/time_maa_f.jsonl
+.venv/bin/python bench/plot_time_maa_f.py  # writes results/time_maa_f.png + .pdf
+```
+
 ## Implementation notes
 
 Hyperparameters follow the paper's stated defaults: percentile step `Δp = 0.03`, minimum

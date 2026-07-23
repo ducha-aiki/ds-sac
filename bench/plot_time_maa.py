@@ -54,7 +54,7 @@ def load_curves(path):
     return curves
 
 
-def draw_panel(ax, ds_curves, title):
+def draw_panel(ax, ds_curves, title, stagger=None):
     ax.set_facecolor(SURFACE)
     ax.set_xscale("log")
     for m, color in COLORS.items():
@@ -65,10 +65,12 @@ def draw_panel(ax, ds_curves, title):
                 markersize=7, label=m, zorder=3,
                 markeredgecolor=SURFACE, markeredgewidth=1.5)
         # Per-method vertical stagger keeps end-labels from colliding when
-        # curves finish at similar mAA.
-        dy = {"pydegensac": -12, "cv2-ransac": 8}.get(m, 5)
-        ax.annotate(m, (pts[-1, 0], pts[-1, 1]), textcoords="offset points",
-                    xytext=(6, dy), fontsize=8.5, color=INK2)
+        # curves finish at similar mAA; None suppresses the direct label
+        # (legend-only) where no collision-free spot exists.
+        dy = (stagger or {"pydegensac": -12, "cv2-ransac": 8}).get(m, 5)
+        if dy is not None:
+            ax.annotate(m, (pts[-1, 0], pts[-1, 1]), textcoords="offset points",
+                        xytext=(6, dy), fontsize=8.5, color=INK2)
     ax.set_title(title, color=INK, fontsize=10.5)
     ax.grid(True, which="major", color=GRID, linewidth=0.75, zorder=0)
     ax.tick_params(colors=MUTED, labelsize=8.5)
