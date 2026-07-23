@@ -105,6 +105,24 @@ Caveats:
 - The RANSAC-family baselines are not seeded (pydegensac and OpenCV use internal randomness), so
   their exact figures vary slightly run to run; only DS-SAC is bit-exact reproducible.
 
+### Accuracy vs. compute budget
+
+![time-mAA curve](assets/time_maa.png)
+
+Each point is one compute budget — `maxIters` 10–6400 for the RANSAC-family baselines, percentile
+step `dp` 0.3–0.015 for DS-SAC (its natural budget knob, since it is deterministic and has no
+iteration cap) — with x = measured mean runtime per pair and y = the method's best mAA over the
+inlier-threshold sweep at that budget. DS-SAC's runtime is flat across inlier thresholds (no
+confidence-based early exit) and its cheap-budget end is bounded below by the partition-tree
+overhead, so its curve spans a narrower time range than the iteration-capped baselines.
+
+Reproduce:
+
+```bash
+.venv/bin/python bench/time_maa.py        # ~10 min, writes results/time_maa.jsonl
+.venv/bin/python bench/plot_time_maa.py   # writes results/time_maa.png + .pdf
+```
+
 ## Implementation notes
 
 Hyperparameters follow the paper's stated defaults: percentile step `Δp = 0.03`, minimum

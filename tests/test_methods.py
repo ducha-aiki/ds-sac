@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from bench.methods import METHODS
+from bench.methods import BUDGETS, METHODS
 
 
 def make_pair(seed=0):
@@ -27,3 +27,15 @@ def test_method_recovers_homography(name):
         return ph[:, :2] / ph[:, 2:]
 
     assert np.abs(proj(H_gt, corners) - proj(H, corners)).max() < 3.0
+
+
+@pytest.mark.parametrize("name", list(BUDGETS))
+def test_budget_factories_produce_runnable_methods(name):
+    budgets, factory = BUDGETS[name]
+    # Generous budget must recover the model; the minimal budget only needs to
+    # run without crashing (10 iterations may legitimately find nothing).
+    p1, p2, H_gt = make_pair()
+    H, mask = factory(budgets[-1])(p1, p2, 2.0)
+    assert H is not None and mask.sum() >= 100
+    H, mask = factory(budgets[0])(p1, p2, 2.0)
+    assert H is None or (H.shape == (3, 3) and mask.dtype == bool)
