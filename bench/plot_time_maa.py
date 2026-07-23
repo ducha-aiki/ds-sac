@@ -53,51 +53,71 @@ def load_curves(path):
     return curves
 
 
+def draw_panel(ax, ds_curves, title):
+    ax.set_facecolor(SURFACE)
+    ax.set_xscale("log")
+    for m, color in COLORS.items():
+        if m not in ds_curves:
+            continue
+        pts = np.array(ds_curves[m])
+        ax.plot(pts[:, 0], pts[:, 1], "-o", color=color, linewidth=2,
+                markersize=7, label=m, zorder=3,
+                markeredgecolor=SURFACE, markeredgewidth=1.5)
+        # Per-method vertical stagger keeps end-labels from colliding when
+        # curves finish at similar mAA.
+        dy = {"pydegensac": -12, "cv2-ransac": 8}.get(m, 5)
+        ax.annotate(m, (pts[-1, 0], pts[-1, 1]), textcoords="offset points",
+                    xytext=(6, dy), fontsize=8.5, color=INK2)
+    ax.set_title(title, color=INK, fontsize=10.5)
+    ax.grid(True, which="major", color=GRID, linewidth=0.75, zorder=0)
+    ax.tick_params(colors=MUTED, labelsize=8.5)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(BASELINE)
+    ax.margins(x=0.18)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", default="results/time_maa.jsonl")
+    ap.add_argument("--results-snn", default=None,
+                    help="second jsonl (SNN-filtered run) -> two-row figure")
     ap.add_argument("--out", default="results/time_maa.png")
     args = ap.parse_args()
 
-    curves = load_curves(ROOT / args.results)
-    datasets = [ds for ds in ("EVD", "HPatchesSeq") if ds in curves] or sorted(curves)
+    rows = [("as shipped (SNN ≤ 0.85)", load_curves(ROOT / args.results))]
+    if args.results_snn:
+        rows.append(("SNN tuned per method",
+                     load_curves(ROOT / args.results_snn)))
+    datasets = [ds for ds in ("EVD", "HPatchesSeq") if ds in rows[0][1]] \
+        or sorted(rows[0][1])
 
-    fig, axes = plt.subplots(1, len(datasets), figsize=(11, 4.2), sharey=True,
-                             facecolor=PAGE)
-    axes = np.atleast_1d(axes)
-    for ax, ds in zip(axes, datasets):
-        ax.set_facecolor(SURFACE)
-        ax.set_xscale("log")
-        for m, color in COLORS.items():
-            if m not in curves[ds]:
-                continue
-            pts = np.array(curves[ds][m])
-            ax.plot(pts[:, 0], pts[:, 1], "-o", color=color, linewidth=2,
-                    markersize=7, label=m, zorder=3,
-                    markeredgecolor=SURFACE, markeredgewidth=1.5)
-            ax.annotate(m, (pts[-1, 0], pts[-1, 1]), textcoords="offset points",
-                        xytext=(6, 5), fontsize=8.5, color=INK2)
-        ax.set_title(ds, color=INK, fontsize=11)
-        ax.set_xlabel("mean time per pair (s, log scale)", color=MUTED, fontsize=9)
-        ax.grid(True, which="major", color=GRID, linewidth=0.75, zorder=0)
-        ax.tick_params(colors=MUTED, labelsize=8.5)
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            ax.spines[side].set_color(BASELINE)
-        ax.margins(x=0.18)
-    axes[0].set_ylabel("mAA (1–20 px, log-spaced)", color=MUTED, fontsize=9)
-    axes[0].set_ylim(0, 1)
-    axes[0].legend(loc="lower right", fontsize=8.5, frameon=False,
-                   labelcolor=INK2)
+    n_rows = len(rows)
+    fig, axes = plt.subplots(n_rows, len(datasets),
+                             figsize=(11, 4.2 * n_rows), sharey=True,
+                             sharex="col", facecolor=PAGE)
+    axes = np.atleast_2d(axes)
+    for i, (row_label, curves) in enumerate(rows):
+        for j, ds in enumerate(datasets):
+            title = f"{ds} — {row_label}" if n_rows > 1 else ds
+            draw_panel(axes[i, j], curves[ds], title)
+        axes[i, 0].set_ylabel("mAA (1–20 px, log-spaced)",
+                              color=MUTED, fontsize=9)
+    for j in range(len(datasets)):
+        axes[-1, j].set_xlabel("mean time per pair (s, log scale)",
+                               color=MUTED, fontsize=9)
+    axes[0, 0].set_ylim(0, 1)
+    axes[0, 0].legend(loc="lower right", fontsize=8.5, frameon=False,
+                      labelcolor=INK2)
     fig.suptitle("Homography estimation: accuracy vs. compute budget",
                  color=INK, fontsize=12.5)
     fig.text(0.5, 0.008,
              "budget: max iterations 10–6400 (pydegensac, cv2); percentile step "
              "dp 0.3–0.015 (DS-SAC) · best inlier threshold per point · "
-             "unfiltered tentative matches",
+             "data ships pre-filtered at SNN ≤ 0.85",
              ha="center", fontsize=8, color=MUTED)
-    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.tight_layout(rect=(0, 0.02 if n_rows > 1 else 0.03, 1, 1))
 
     out = ROOT / args.out
     out.parent.mkdir(exist_ok=True)

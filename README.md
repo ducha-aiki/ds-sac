@@ -62,12 +62,20 @@ bench/setup_data.sh
 the tutorial's `homography.tar.gz` correspondence archive.
 
 Protocol: the tutorial's `val` split of EVD (7 pairs) and HPatchesSeq (145 pairs), each with
-precomputed tentative correspondences and ground-truth homographies. All methods receive the
-same **unfiltered** tentative correspondences (no SNN-ratio filtering). Metric is the tutorial's
-mean absolute reprojection error on the jointly-visible region, aggregated into mAA over the
-tutorial's log-spaced 1–20 px threshold set. Baseline methods (OpenCV RANSAC, OpenCV MAGSAC++,
-pydegensac) are capped at 2000 iterations, confidence 0.999; DS-SAC has no iteration cap since it
-is deterministic. Each method is swept at inlier thresholds {0.5, 0.75, 1, 2, 4} px.
+precomputed tentative correspondences and ground-truth homographies. In the default protocol all
+methods receive the same correspondences **as shipped** — note the archive is already
+pre-filtered at SNN ratio ≈ 0.85, so "no additional filtering" still means a 0.85 ratio test.
+Metric is the tutorial's mean absolute reprojection error on the jointly-visible region,
+aggregated into mAA over the tutorial's log-spaced 1–20 px threshold set. Baseline methods
+(OpenCV RANSAC, OpenCV MAGSAC++, pydegensac) are capped at 2000 iterations, confidence 0.999;
+DS-SAC has no iteration cap since it is deterministic. Each method is swept at inlier thresholds
+{0.5, 0.75, 1, 2, 4} px; the SNN-filtered protocol additionally sweeps the ratio threshold
+{0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 1.0}:
+
+```bash
+.venv/bin/python bench/run_bench.py --snn 0.6 0.65 0.7 0.75 0.8 0.85 1.0 --out results/results_snn.jsonl
+.venv/bin/python bench/tune_snn.py     # staged tuning table + results/best_snn.json
+```
 
 ## Results
 
@@ -91,13 +99,35 @@ Best per method (HPatchesSeq):
 
 Full per-threshold tables are in `results/report.md` (regenerated locally, not tracked in git).
 
+### SNN-filtered protocol
+
+Staged tuning (per method and dataset: best SNN ratio at the as-shipped best inlier threshold,
+then inlier threshold re-tuned at that SNN), from `bench/tune_snn.py`:
+
+| dataset | method | th@snn=1.0 | mAA@snn=1.0 | best snn | mAA stage1 | re-tuned th | mAA stage2 |
+|---|---|---|---|---|---|---|---|
+| EVD | cv2-magsac | 0.5 | 0.5857 | 1.0 | 0.5857 | 0.5 | 0.5857 |
+| EVD | cv2-ransac | 4.0 | 0.4286 | 0.75 | 0.5571 | 4.0 | 0.5571 |
+| EVD | dssac | 1.0 | 0.5000 | 1.0 | 0.5000 | 1.0 | 0.5000 |
+| EVD | pydegensac | 1.0 | 0.4286 | 0.7 | 0.5000 | 0.75 | 0.5714 |
+| HPatchesSeq | cv2-magsac | 0.5 | 0.9152 | 0.85 | 0.9166 | 0.5 | 0.9166 |
+| HPatchesSeq | cv2-ransac | 4.0 | 0.8786 | 0.7 | 0.8807 | 4.0 | 0.8807 |
+| HPatchesSeq | dssac | 4.0 | 0.8290 | 0.85 | 0.8441 | 4.0 | 0.8441 |
+| HPatchesSeq | pydegensac | 1.0 | 0.7083 | 0.85 | 0.7255 | 0.5 | 0.7276 |
+
+Takeaways: SNN tuning matters most on EVD, where it lifts pydegensac from 0.43 to **0.57**
+(ahead of DS-SAC's 0.50) and cv2-RANSAC to 0.56; DS-SAC's own optimum on EVD is *no extra
+filtering* — it prefers to see all the correspondences and reject outliers itself. On
+HPatchesSeq the gains are small for every method (the shipped 0.85 pre-filter is already close
+to optimal there).
+
 Caveats:
 
 - DS-SAC here is pure NumPy while all three baselines are compiled C++ (OpenCV, pydegensac); the
   runtime column is indicative only, not an apples-to-apples speed comparison.
-- Tentative correspondences are unfiltered by SNN ratio for every method, which is harsher than
-  typical usage and may understate methods that are usually run on SNN-filtered matches
-  (notably pydegensac).
+- The archive's tentative correspondences are already SNN-pre-filtered at ≈ 0.85, so the default
+  protocol is not a truly unfiltered regime; the SNN-filtered protocol above tunes the ratio
+  further per method.
 - Both validation sets are small — EVD is only 7 pairs — so differences of a few percent in mAA
   should be treated as noise rather than a reliable ranking, especially on EVD.
 - The "best per method" tables report each method at its own best inlier threshold from the sweep,
@@ -112,15 +142,18 @@ Caveats:
 Each point is one compute budget — `maxIters` 10–6400 for the RANSAC-family baselines, percentile
 step `dp` 0.3–0.015 for DS-SAC (its natural budget knob, since it is deterministic and has no
 iteration cap) — with x = measured mean runtime per pair and y = the method's best mAA over the
-inlier-threshold sweep at that budget. DS-SAC's runtime is flat across inlier thresholds (no
-confidence-based early exit) and its cheap-budget end is bounded below by the partition-tree
-overhead, so its curve spans a narrower time range than the iteration-capped baselines.
+inlier-threshold sweep at that budget. Top row: correspondences as shipped (SNN ≤ 0.85); bottom
+row: each method at its tuned SNN threshold from `results/best_snn.json`. DS-SAC's runtime is
+flat across inlier thresholds (no confidence-based early exit) and its cheap-budget end is
+bounded below by the partition-tree overhead, so its curve spans a narrower time range than the
+iteration-capped baselines.
 
 Reproduce:
 
 ```bash
 .venv/bin/python bench/time_maa.py        # ~10 min, writes results/time_maa.jsonl
-.venv/bin/python bench/plot_time_maa.py   # writes results/time_maa.png + .pdf
+.venv/bin/python bench/time_maa.py --snn-json results/best_snn.json --out results/time_maa_snn.jsonl
+.venv/bin/python bench/plot_time_maa.py --results-snn results/time_maa_snn.jsonl
 ```
 
 ## Implementation notes
