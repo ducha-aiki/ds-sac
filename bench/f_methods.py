@@ -43,3 +43,49 @@ F_METHODS = {
     "cv2-ransac": _cv2_f_method(cv2.FM_RANSAC),
     "cv2-magsac": _cv2_f_method(cv2.USAC_MAGSAC),
 }
+
+
+def _dssac_f_budget(p_min):
+    def factory(dp):
+        def run(pts1, pts2, th):
+            return dssac.find_fundamental(pts1, pts2, threshold=th, dp=dp,
+                                          p_min=p_min)
+        return run
+    return factory
+
+
+def _pydegensac_f_budget(max_iters):
+    def run(pts1, pts2, th):
+        F, mask = pydegensac.findFundamentalMatrix(pts1, pts2, th, CONF,
+                                                   max_iters)
+        if F is None:
+            return None, np.zeros(len(pts1), bool)
+        return F, np.asarray(mask, bool)
+    return run
+
+
+def _cv2_f_budget(flag):
+    def factory(max_iters):
+        def run(pts1, pts2, th):
+            F, mask = cv2.findFundamentalMat(pts1, pts2, flag, th,
+                                             confidence=CONF,
+                                             maxIters=max_iters)
+            if F is None:
+                return None, np.zeros(len(pts1), bool)
+            return F[:3], mask.ravel().astype(bool)
+        return run
+    return factory
+
+
+# Compute-budget knob per method for the time-mAA curve (dp for DS-SAC,
+# iteration cap for the RANSAC family), plus each method's tuned SNN ratio
+# threshold from the results_f_snn.jsonl grid.
+_ITER_BUDGETS_F = (10, 25, 100, 400, 1600, 6400)
+_DP_BUDGETS = (0.3, 0.2, 0.12, 0.06, 0.03, 0.015)
+F_BUDGETS = {
+    "dssac": (_DP_BUDGETS, _dssac_f_budget(0.2), 0.75),
+    "dssac-pmin0.1": (_DP_BUDGETS, _dssac_f_budget(0.1), 0.75),
+    "pydegensac": (_ITER_BUDGETS_F, _pydegensac_f_budget, 0.8),
+    "cv2-ransac": (_ITER_BUDGETS_F, _cv2_f_budget(cv2.FM_RANSAC), 0.8),
+    "cv2-magsac": (_ITER_BUDGETS_F, _cv2_f_budget(cv2.USAC_MAGSAC), 0.75),
+}
