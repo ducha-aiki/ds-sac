@@ -1,13 +1,17 @@
 """Numba fast path: the full DS-SAC search pipeline as fused nopython kernels.
 
-Mirrors dssac.core / dssac.homography exactly, with two benign deviations:
-k-smallest selection uses argsort instead of argpartition (tie order may
-differ) and floating-point summation order differs, so results can deviate
-from the NumPy path in the last bits (verified equivalent in mAA on the
-benchmark). Fully deterministic for a fixed input, like the NumPy path.
+Mirrors dssac.core / dssac.homography exactly, with benign deviations:
+k-smallest selection uses np.partition + a two-pass scan instead of
+argpartition (tie order may differ), floating-point summation order differs,
+and the residual denominator clamp treats an exact -0.0 as +0.0. Results can
+therefore deviate from the NumPy path in the last bits (verified equivalent
+in mAA on the benchmark). Fully deterministic for a fixed input, like the
+NumPy path.
 """
 import numpy as np
 from numba import njit
+
+from .homography import MIN_PTS
 
 
 @njit(cache=True)
@@ -16,7 +20,7 @@ def _fit(pts1, pts2, idx):
     Returns (H, ok)."""
     n = idx.shape[0]
     H = np.zeros((3, 3))
-    if n < 4:
+    if n < MIN_PTS:
         return H, False
     cx1 = 0.0
     cy1 = 0.0
@@ -221,8 +225,8 @@ def _round(pts1, pts2, S, H, d2, p, T_sq,
     for t in range(ns):
         dS[t] = d2[S[t]]
     k = int(np.ceil(p * N))
-    if k < 4:
-        k = 4
+    if k < MIN_PTS:
+        k = MIN_PTS
     if k > ns:
         k = ns
     sel = S if k == ns else _select_k(dS, S, k)
@@ -242,7 +246,7 @@ def _round(pts1, pts2, S, H, d2, p, T_sq,
     for t in range(ns):
         if dS[t] <= T_sq:
             cnt += 1
-    if cnt >= 4:
+    if cnt >= MIN_PTS:
         supp = np.empty(cnt, np.int64)
         c = 0
         for t in range(ns):
@@ -250,7 +254,7 @@ def _round(pts1, pts2, S, H, d2, p, T_sq,
                 supp[c] = S[t]
                 c += 1
     else:
-        supp = _select_k(dS, S, 4)
+        supp = _select_k(dS, S, MIN_PTS)
     Hi, ok = _fit(pts1, pts2, supp)
     if ok:
         di = _residuals(Hi, pts1, pts2)
@@ -275,8 +279,8 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
     g_msac = -1e300
     g_H = np.zeros((3, 3))
     min_size = int(np.ceil(p_min * N))
-    if min_size < 4:
-        min_size = 4
+    if min_size < MIN_PTS:
+        min_size = MIN_PTS
 
     stack = [np.arange(N)]
     depths = [0]
@@ -379,7 +383,7 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
         for i in range(N):
             if d2[i] <= lim:
                 cnt += 1
-        if cnt < 4:
+        if cnt < MIN_PTS:
             continue
         sel = np.empty(cnt, np.int64)
         c = 0

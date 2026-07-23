@@ -187,7 +187,7 @@ Two interchangeable backends implement the identical algorithm:
 
 - **numpy** (`dssac/core.py` + `dssac/homography.py`): dependency-free reference,
   ~20 ms/pair on the benchmark data (N ≈ 500–1400).
-- **numba** (`dssac/_fast.py`, `pip install dssac[fast]`): the whole pipeline — moment-form
+- **numba** (`dssac/_fast.py`, `pip install "dssac[fast]"`): the whole pipeline — moment-form
   normal equations + 9x9 `eigh` for each DLT fit, fused residual/score loops, O(N) percentile
   selection via `np.partition`, explicit-stack recursive partitioning, post-tuning — as
   `@njit(cache=True)` kernels: ~2–4 ms/pair, ~9x faster. First call pays ~5 s of JIT
