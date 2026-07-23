@@ -39,7 +39,12 @@ def main():
                 for m in args.methods:
                     for th in THRESHOLDS:
                         t0 = time.perf_counter()
-                        H, mask = METHODS[m](pair["pts1"], pair["pts2"], th)
+                        try:
+                            H, mask = METHODS[m](pair["pts1"], pair["pts2"], th)
+                        except Exception as exc:
+                            print(f"{m} raised on {ds}/{pair['name']} th={th}: {exc}",
+                                  file=sys.stderr)
+                            H, mask = None, None
                         dt = time.perf_counter() - t0
                         if H is None:
                             err = FAIL_ERR

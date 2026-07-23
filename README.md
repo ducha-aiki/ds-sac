@@ -100,6 +100,10 @@ Caveats:
   (notably pydegensac).
 - Both validation sets are small — EVD is only 7 pairs — so differences of a few percent in mAA
   should be treated as noise rather than a reliable ranking, especially on EVD.
+- The "best per method" tables report each method at its own best inlier threshold from the sweep,
+  i.e. a per-method-tuned operating point, not a single fixed protocol.
+- The RANSAC-family baselines are not seeded (pydegensac and OpenCV use internal randomness), so
+  their exact figures vary slightly run to run; only DS-SAC is bit-exact reproducible.
 
 ## Implementation notes
 

@@ -38,7 +38,11 @@ def main():
             if d != ds:
                 continue
             errs = [r["err"] for r in recs]
-            row = (m, th, maa(errs), float(np.median(errs)),
+            # mAA counts failures (err = 1e6 sentinel) as misses; the median is
+            # reported over successful estimates only so a >50% failure rate
+            # shows up as a high mAA loss, not a nonsensical 1e6 median.
+            ok = [e for e in errs if e < 1e6] or [float("inf")]
+            row = (m, th, maa(errs), float(np.median(ok)),
                    float(np.mean([r["time"] for r in recs])))
             print("| {} | {} | {:.4f} | {:.2f} | {:.4f} |".format(*row))
             if m not in best or row[2] > best[m][2]:
