@@ -80,9 +80,9 @@ def test_backward_search_sweeps_expected_percentile_range(monkeypatch):
     local.p = 0.2
     seen = []
 
-    def fake_refine(pts1_, pts2_, S_, H, p, T_sq, local_, glob_):
+    def fake_refine(pts1_, pts2_, S_, H, d2, p, T_sq, local_, glob_):
         seen.append(p)
-        return H
+        return H, d2
 
     monkeypatch.setattr(core, "_refine_round", fake_refine)
     _backward_search(pts1, pts2, S, T_sq=4.0, dp=0.1, local=local, glob=_Best())

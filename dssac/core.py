@@ -22,38 +22,41 @@ def _score(d2, T_sq):
 
 
 def _consider(H, pts1, pts2, T_sq, p, local, glob):
-    """Score H on the full set; update local and global bests. Returns the score."""
-    sc = _score(transfer_error_sq(H, pts1, pts2), T_sq)
+    """Score H on the full set; update local and global bests.
+    Returns (score, full-set squared residuals of H)."""
+    d2 = transfer_error_sq(H, pts1, pts2)
+    sc = _score(d2, T_sq)
     if sc > local.score:
         local.score, local.H, local.p = sc, H, p
     if glob is not None and sc > glob.score:
         glob.score, glob.H = sc, H
-    return sc
+    return sc, d2
 
 
-def _refine_round(pts1, pts2, S, H, p, T_sq, local, glob):
+def _refine_round(pts1, pts2, S, H, d2, p, T_sq, local, glob):
     """One DS-SAC round at percentile p: percentile optimization then inlier
     optimization, both restricted to partition S, scored on the full set.
-    Returns the model to carry into the next round."""
+    `d2` must be the cached full-set squared residuals of `H`; returns the
+    (model, residuals) pair to carry into the next round."""
     N = len(pts1)
-    d2 = transfer_error_sq(H, pts1[S], pts2[S])
+    dS = d2[S]
     k = min(max(int(np.ceil(p * N)), MIN_PTS), len(S))
-    sel = S if k == len(S) else S[np.argpartition(d2, k - 1)[:k]]
+    sel = S if k == len(S) else S[np.argpartition(dS, k - 1)[:k]]
     H_p = dlt(pts1[sel], pts2[sel])
     if H_p is not None:
         H = H_p
-        _consider(H, pts1, pts2, T_sq, p, local, glob)
+        _, d2 = _consider(H, pts1, pts2, T_sq, p, local, glob)
+        dS = d2[S]
 
-    d2 = transfer_error_sq(H, pts1[S], pts2[S])
-    inl = d2 <= T_sq
-    supp = S[inl] if inl.sum() >= MIN_PTS else S[np.argsort(d2)[:MIN_PTS]]
+    inl = dS <= T_sq
+    supp = S[inl] if inl.sum() >= MIN_PTS else S[np.argsort(dS)[:MIN_PTS]]
     H_i = dlt(pts1[supp], pts2[supp])
     if H_i is not None:
         prev_best = local.score
-        sc = _consider(H_i, pts1, pts2, T_sq, p, local, glob)
+        sc, d2_i = _consider(H_i, pts1, pts2, T_sq, p, local, glob)
         if sc > prev_best:
-            H = H_i
-    return H
+            H, d2 = H_i, d2_i
+    return H, d2
 
 
 def _forward_search(pts1, pts2, S, T_sq, dp, p_min, glob):
@@ -64,9 +67,9 @@ def _forward_search(pts1, pts2, S, T_sq, dp, p_min, glob):
         return None
     N = len(pts1)
     p_part = len(S) / N
-    _consider(H, pts1, pts2, T_sq, p_part, local, glob)
+    _, d2 = _consider(H, pts1, pts2, T_sq, p_part, local, glob)
     for p in np.arange(p_part, p_min - 1e-9, -dp):
-        H = _refine_round(pts1, pts2, S, H, p, T_sq, local, glob)
+        H, d2 = _refine_round(pts1, pts2, S, H, d2, p, T_sq, local, glob)
     return local
 
 
@@ -77,8 +80,9 @@ def _backward_search(pts1, pts2, S, T_sq, dp, local, glob):
     N = len(pts1)
     p_bwd = 0.5 * (len(S) / N)
     H = local.H
+    d2 = transfer_error_sq(H, pts1, pts2)
     for p in np.arange(local.p + dp, p_bwd + 1e-9, dp):
-        H = _refine_round(pts1, pts2, S, H, p, T_sq, local, glob)
+        H, d2 = _refine_round(pts1, pts2, S, H, d2, p, T_sq, local, glob)
 
 
 _MAX_DEPTH = 64

@@ -34,11 +34,21 @@ def dlt(pts1, pts2):
     p2 = pts2 * T2[0, 0] + T2[:2, 2]
     u, v = p1[:, 0], p1[:, 1]
     up, vp = p2[:, 0], p2[:, 1]
-    zeros = np.zeros(n)
-    ones = np.ones(n)
-    ax = np.stack([u, v, ones, zeros, zeros, zeros, -up * u, -up * v, -up], axis=1)
-    ay = np.stack([zeros, zeros, zeros, u, v, ones, -vp * u, -vp * v, -vp], axis=1)
-    A = np.concatenate([ax, ay], axis=0)
+    A = np.empty((2 * n, 9))
+    A[:n, 0] = u
+    A[:n, 1] = v
+    A[:n, 2] = 1.0
+    A[:n, 3:6] = 0.0
+    A[:n, 6] = -up * u
+    A[:n, 7] = -up * v
+    A[:n, 8] = -up
+    A[n:, 0:3] = 0.0
+    A[n:, 3] = u
+    A[n:, 4] = v
+    A[n:, 5] = 1.0
+    A[n:, 6] = -vp * u
+    A[n:, 7] = -vp * v
+    A[n:, 8] = -vp
     ata = A.T @ A
     try:
         w, V = np.linalg.eigh(ata)
