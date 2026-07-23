@@ -98,17 +98,17 @@ Best per method (EVD):
 | method | th (px) | mAA | median err | mean time (s) |
 |---|---|---|---|---|
 | cv2-magsac | 0.5 | 0.5857 | 4.24 | 0.0011 |
-| dssac | 1.0 | 0.5000 | 4.73 | 0.0018 |
-| cv2-ransac | 4.0 | 0.4286 | 5.14 | 0.0125 |
-| pydegensac | 2.0 | 0.4286 | 4.73 | 0.0024 |
+| dssac | 4.0 | 0.5143 | 4.89 | 0.0020 |
+| cv2-ransac | 4.0 | 0.4286 | 5.14 | 0.0126 |
+| pydegensac | 2.0 | 0.3857 | 7.59 | 0.0023 |
 
 Best per method (HPatchesSeq):
 | method | th (px) | mAA | median err | mean time (s) |
 |---|---|---|---|---|
-| cv2-magsac | 0.5 | 0.9152 | 0.50 | 0.0022 |
+| cv2-magsac | 0.5 | 0.9152 | 0.50 | 0.0023 |
 | cv2-ransac | 4.0 | 0.8786 | 0.69 | 0.0058 |
-| dssac | 4.0 | 0.8441 | 0.60 | 0.0035 |
-| pydegensac | 1.0 | 0.7428 | 1.64 | 0.0034 |
+| dssac | 4.0 | 0.8441 | 0.63 | 0.0037 |
+| pydegensac | 1.0 | 0.7310 | 1.61 | 0.0035 |
 
 (DS-SAC timings use the numba backend; the pure-NumPy backend is ~9x slower at equal or
 marginally different accuracy — see Implementation notes.)
@@ -124,12 +124,12 @@ then inlier threshold re-tuned at that SNN), from `bench/tune_snn.py`:
 |---|---|---|---|---|---|---|---|
 | EVD | cv2-magsac | 0.5 | 0.5857 | 1.0 | 0.5857 | 0.5 | 0.5857 |
 | EVD | cv2-ransac | 4.0 | 0.4286 | 0.75 | 0.5571 | 4.0 | 0.5571 |
-| EVD | dssac | 1.0 | 0.5000 | 1.0 | 0.5000 | 1.0 | 0.5000 |
-| EVD | pydegensac | 1.0 | 0.4143 | 0.8 | 0.4714 | 1.0 | 0.4714 |
+| EVD | dssac | 4.0 | 0.5143 | 1.0 | 0.5143 | 4.0 | 0.5143 |
+| EVD | pydegensac | 2.0 | 0.4286 | 0.7 | 0.5000 | 1.0 | 0.5571 |
 | HPatchesSeq | cv2-magsac | 0.5 | 0.9152 | 0.85 | 0.9166 | 0.5 | 0.9166 |
 | HPatchesSeq | cv2-ransac | 4.0 | 0.8786 | 0.7 | 0.8807 | 4.0 | 0.8807 |
-| HPatchesSeq | dssac | 4.0 | 0.8441 | 0.85 | 0.8586 | 4.0 | 0.8586 |
-| HPatchesSeq | pydegensac | 0.75 | 0.7345 | 1.0 | 0.7345 | 0.75 | 0.7345 |
+| HPatchesSeq | dssac | 4.0 | 0.8441 | 0.85 | 0.8524 | 4.0 | 0.8524 |
+| HPatchesSeq | pydegensac | 0.75 | 0.7276 | 0.65 | 0.7476 | 0.75 | 0.7476 |
 
 Takeaways: SNN tuning matters most on EVD, where it consistently lifts the stochastic
 baselines (cv2-RANSAC 0.43 → 0.56 here; pydegensac gained between 0.06 and 0.14 across our
