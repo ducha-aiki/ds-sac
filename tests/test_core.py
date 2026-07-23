@@ -1,4 +1,5 @@
 import numpy as np
+import dssac
 from dssac.core import _Best, _score, _forward_search, _backward_search, _search_partition
 from dssac.homography import transfer_error_sq
 
@@ -81,3 +82,34 @@ def test_search_partition_high_outlier_ratio():
     assert glob.H is not None
     assert max_corner_error(glob.H) < 10.0
     assert glob.score[0] >= 0.6 * gt.sum()
+
+
+def test_find_homography_outlier_ratios():
+    for ratio, tol in [(0.2, 2.0), (0.5, 3.0), (0.8, 5.0)]:
+        n_out = int(100 * ratio / (1 - ratio))
+        pts1, pts2, gt = make_scene(100, n_out, noise=0.5, seed=11)
+        H, mask = dssac.find_homography(pts1, pts2, threshold=2.0)
+        assert H is not None, f"failed at ratio {ratio}"
+        assert max_corner_error(H) < tol, f"ratio {ratio}"
+        # inlier mask should mostly agree with ground truth
+        assert (mask & gt).sum() >= 0.8 * gt.sum(), f"ratio {ratio}"
+
+
+def test_find_homography_is_deterministic():
+    pts1, pts2, _ = make_scene(100, 100, noise=0.5, seed=5)
+    H1, m1 = dssac.find_homography(pts1, pts2, threshold=2.0)
+    H2, m2 = dssac.find_homography(pts1, pts2, threshold=2.0)
+    assert np.array_equal(H1, H2)
+    assert np.array_equal(m1, m2)
+
+
+def test_find_homography_too_few_points():
+    pts = np.zeros((3, 2))
+    H, mask = dssac.find_homography(pts, pts)
+    assert H is None and mask is None
+
+
+def test_find_homography_normalized_h33():
+    pts1, pts2, _ = make_scene(100, 20, noise=0.3, seed=2)
+    H, _ = dssac.find_homography(pts1, pts2, threshold=2.0)
+    assert np.isclose(H[2, 2], 1.0)

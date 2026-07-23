@@ -110,3 +110,54 @@ def _search_partition(pts1, pts2, S, T_sq, dp, p_min, glob, depth=0):
             return  # split failed; recursing would loop on the same set
     _search_partition(pts1, pts2, S_plus, T_sq, dp, p_min, glob, depth + 1)
     _search_partition(pts1, pts2, S_minus, T_sq, dp, p_min, glob, depth + 1)
+
+
+def _post_tune(pts1, pts2, glob, T_sq, ks):
+    """Chain-refit on inlier sets at relaxed-to-strict thresholds k*T."""
+    H = glob.H
+    for k in ks:
+        d2 = transfer_error_sq(H, pts1, pts2)
+        sel = d2 <= (k * k) * T_sq
+        if sel.sum() < MIN_PTS:
+            continue
+        H_new = dlt(pts1[sel], pts2[sel])
+        if H_new is None:
+            continue
+        H = H_new
+        sc = _score(transfer_error_sq(H, pts1, pts2), T_sq)
+        if sc > glob.score:
+            glob.score, glob.H = sc, H
+
+
+def find_homography(pts1, pts2, threshold=0.54, dp=0.03, p_min=0.2,
+                    post_tuning_ks=(3.0, 2.0, 1.5, 1.0)):
+    """Estimate a homography pts1 -> pts2 with DS-SAC.
+
+    Args:
+        pts1, pts2: (N, 2) arrays of corresponding points.
+        threshold: inlier threshold in pixels (one-way transfer error).
+        dp: percentile step of the forward/backward search.
+        p_min: minimum percentile / minimum partition size fraction.
+        post_tuning_ks: relaxed-to-strict multipliers of `threshold`.
+
+    Returns:
+        (H, mask): 3x3 array with H[2,2] == 1 and boolean inlier mask,
+        or (None, None) on failure.
+    """
+    pts1 = np.ascontiguousarray(pts1, dtype=np.float64).reshape(-1, 2)
+    pts2 = np.ascontiguousarray(pts2, dtype=np.float64).reshape(-1, 2)
+    if len(pts1) != len(pts2):
+        raise ValueError("pts1 and pts2 must have the same length")
+    if len(pts1) < MIN_PTS:
+        return None, None
+    T_sq = float(threshold) ** 2
+    glob = _Best()
+    _search_partition(pts1, pts2, np.arange(len(pts1)), T_sq, dp, p_min, glob)
+    if glob.H is None:
+        return None, None
+    _post_tune(pts1, pts2, glob, T_sq, post_tuning_ks)
+    H = glob.H
+    if abs(H[2, 2]) > 1e-12:
+        H = H / H[2, 2]
+    mask = transfer_error_sq(H, pts1, pts2) <= T_sq
+    return H, mask
