@@ -362,7 +362,10 @@ def search(pts1, pts2, T_sq, dp, p_min, ks):
     buf = np.empty(N, np.int64)
     for i in range(N):
         buf[i] = i
-    _CAP = 256  # >= 2 * max depth (64) + slack
+    # Live entries peak at ~depth+1 (the pending minus-sibling per DFS level,
+    # depth capped at 64), so 256 has ample headroom; the guard below treats an
+    # over-capacity node as a leaf rather than overflowing.
+    _CAP = 256
     e_start = np.empty(_CAP, np.int64)
     e_len = np.empty(_CAP, np.int64)
     e_depth = np.empty(_CAP, np.int64)
