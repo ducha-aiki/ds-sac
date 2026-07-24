@@ -190,7 +190,10 @@ Benchmark: one PhotoTourism validation scene (st_peters_square, 4950 pairs) fetc
 needed h5 files precede the images in the tar). Metric: max(rotation, translation) angular
 error of the pose recovered from F (converted to E with GT intrinsics), per
 [ransac-benchmark-2025](https://github.com/ducha-aiki/ransac-benchmark-2025), mAA over 1–10°.
-This data ships **unfiltered**, so the protocol sweeps the SNN ratio threshold for all methods:
+This data ships **unfiltered**, so the protocol sweeps the SNN ratio threshold for all methods.
+Baselines also include `vibesac` — a seeded, PROSAC-ordered LO-RANSAC (7-point minimal solver)
+reference implementation from ransac-benchmark-2025's `ransac_benchmark_imc.vibesac`, using the
+SNN ratio as the PROSAC ordering score:
 
 ```bash
 bench/setup_f_data.sh
@@ -207,10 +210,15 @@ Best mAA@10° (over the 0.5–2 px inlier-threshold sweep) per method × SNN thr
 | pydegensac | 0.203 | 0.242 | 0.267 | 0.277 | **0.297** | 0.280 | 0.050 |
 | cv2-ransac | 0.173 | 0.210 | 0.253 | 0.281 | **0.303** | 0.291 | 0.074 |
 | cv2-magsac | 0.255 | 0.294 | 0.331 | **0.359** | 0.355 | 0.325 | 0.118 |
+| vibesac | 0.209 | 0.253 | 0.296 | 0.341 | 0.372 | **0.388** | 0.310 |
 
 Takeaways:
 
-- Every method peaks at SNN 0.75–0.8 and collapses without filtering (mAA ≤ 0.12 even for
+- `vibesac` wins outright — 0.388 mAA@10° at SNN 0.85, ahead of MAGSAC++'s 0.359 — and is far
+  more robust to unfiltered input: 0.310 mAA with SNN off entirely, vs. 0.05–0.12 for every
+  other method. Its PROSAC ordering by SNN ratio evidently does most of the work that explicit
+  ratio-filtering does for the rest of the field.
+- Every other method peaks at SNN 0.75–0.8 and collapses without filtering (mAA ≤ 0.12 even for
   MAGSAC++): the raw tentative matches often have 11–15% inliers, too few for reliable F
   estimation across the board.
 - `p_min = 0.1` helps DS-SAC at *every* SNN level (+0.02–0.04 mAA for ~1.6× runtime,
@@ -227,13 +235,17 @@ Takeaways:
 ![F time-mAA curve](assets/time_maa_f.png)
 
 Same construction as the homography figure, at each method's tuned SNN threshold: budget =
-`maxIters` 10–6400 for the RANSAC family, percentile step `dp` 0.3–0.015 for both DS-SAC
-variants; each point reports the best pose mAA over the 0.5–2 px inlier-threshold sweep against
-measured mean runtime. MAGSAC++ dominates; `dssac-pmin0.1` traces the second-best frontier
-(0.27 → 0.31 over 0.7–4.5 ms), staying above pydegensac until pydegensac's largest budgets
-catch up, while cv2-RANSAC needs ~7x more time for comparable accuracy. The default-`p_min`
-DS-SAC curve sits consistently below the `p_min = 0.1` variant — on this data the deeper
-search tree buys more than a finer percentile step does.
+`maxIters` 10–6400 for the RANSAC family (pydegensac, cv2, vibesac), percentile step `dp`
+0.3–0.015 for both DS-SAC variants; each point reports the best pose mAA over the 0.5–2 px
+inlier-threshold sweep against measured mean runtime. `vibesac` dominates the frontier: its
+cheapest budget (10 iters, 0.4 ms, mAA 0.345) already beats the best budget of every other
+method except MAGSAC++ (0.360), and by its third-cheapest budget (1.0 ms) it has overtaken
+MAGSAC++ too, climbing to 0.39 mAA by 13 ms with no other method ever catching up. Among the
+rest, MAGSAC++ is best, with `dssac-pmin0.1` tracing the second-best frontier
+(0.27 → 0.31 over 0.7–4.5 ms), staying above
+pydegensac until pydegensac's largest budgets catch up, while cv2-RANSAC needs ~7x more time for
+comparable accuracy. The default-`p_min` DS-SAC curve sits consistently below the `p_min = 0.1`
+variant — on this data the deeper search tree buys more than a finer percentile step does.
 
 Reproduce:
 

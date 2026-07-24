@@ -24,6 +24,7 @@ COLORS = {
     "cv2-ransac": "#1baf7a",
     "cv2-magsac": "#eda100",
     "dssac-pmin0.1": "#e87ba4",  # only present in the F benchmark
+    "vibesac": "#7a4fd1",  # only present in the F benchmark
 }
 SURFACE, PAGE = "#fcfcfb", "#f9f9f7"
 INK, INK2, MUTED = "#0b0b0b", "#52514e", "#898781"

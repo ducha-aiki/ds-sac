@@ -50,6 +50,10 @@ def run_pydegensac_f(pts1, pts2, th, scores=None):
 
 def _vibesac_method(max_trials=MAX_ITERS):
     def run(pts1, pts2, th, scores=None):
+        # vibesac's minimal-sample rejection loop spins forever if asked for
+        # 7 unique indices out of fewer than 7 points; guard before it hangs.
+        if len(pts1) < 7:
+            return None, np.zeros(len(pts1), bool)
         # PROSAC assumes quality-ordered input: sort by SNN ratio ascending
         # (best first) and map the returned mask back to the input order.
         if scores is not None:
@@ -82,7 +86,7 @@ if _vibesac is not None:
 
 def _dssac_f_budget(p_min):
     def factory(dp):
-        def run(pts1, pts2, th):
+        def run(pts1, pts2, th, scores=None):
             return dssac.find_fundamental(pts1, pts2, threshold=th, dp=dp,
                                           p_min=p_min)
         return run
@@ -90,7 +94,7 @@ def _dssac_f_budget(p_min):
 
 
 def _pydegensac_f_budget(max_iters):
-    def run(pts1, pts2, th):
+    def run(pts1, pts2, th, scores=None):
         F, mask = pydegensac.findFundamentalMatrix(pts1, pts2, th, CONF,
                                                    max_iters)
         if F is None:
@@ -99,9 +103,13 @@ def _pydegensac_f_budget(max_iters):
     return run
 
 
+def _vibesac_f_budget(max_trials):
+    return _vibesac_method(max_trials)
+
+
 def _cv2_f_budget(flag):
     def factory(max_iters):
-        def run(pts1, pts2, th):
+        def run(pts1, pts2, th, scores=None):
             F, mask = cv2.findFundamentalMat(pts1, pts2, flag, th,
                                              confidence=CONF,
                                              maxIters=max_iters)
@@ -124,3 +132,5 @@ F_BUDGETS = {
     "cv2-ransac": (_ITER_BUDGETS_F, _cv2_f_budget(cv2.FM_RANSAC), 0.8),
     "cv2-magsac": (_ITER_BUDGETS_F, _cv2_f_budget(cv2.USAC_MAGSAC), 0.75),
 }
+if _vibesac is not None:
+    F_BUDGETS["vibesac"] = (_ITER_BUDGETS_F, _vibesac_f_budget, 0.85)
