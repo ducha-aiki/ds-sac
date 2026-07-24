@@ -49,7 +49,8 @@ def main():
     for ax, sc in zip(axes[0], scenes):
         draw_panel(ax, curves[sc], f"PhotoTourism {sc} — fundamental matrix",
                    stagger={"dssac": None, "pydegensac": -4, "cv2-ransac": 8,
-                            "dssac-pmin0.1": 10, "vibesac": -10})
+                            "dssac-pmin0.1": 10, "vibesac": -10,
+                            "vibesac-noprosac": None})
         ax.set_xlabel("mean time per pair (s, log scale)", color=MUTED, fontsize=9)
     axes[0, 0].set_ylabel("pose mAA (1–10°)", color=MUTED, fontsize=9)
     axes[0, 0].set_ylim(0, 0.5)
@@ -59,7 +60,7 @@ def main():
                  color=INK, fontsize=12.5)
     fig.text(0.5, 0.008,
              "budget: max iterations 10–6400 (pydegensac, cv2, vibesac); percentile step dp 0.3–0.015 (DS-SAC)\n"
-             "best inlier threshold per point · per-method tuned SNN (0.75–0.85)",
+             "best inlier threshold per point · per-method tuned SNN (0.75–0.85) · vibesac-noprosac: uniform sampling, no PROSAC ordering",
              ha="center", fontsize=8, color=MUTED)
     fig.tight_layout(rect=(0, 0.06, 1, 1))
     out = ROOT / args.out

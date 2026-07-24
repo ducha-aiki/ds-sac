@@ -48,7 +48,7 @@ def run_pydegensac_f(pts1, pts2, th, scores=None):
     return F, np.asarray(mask, bool)
 
 
-def _vibesac_method(max_trials=MAX_ITERS):
+def _vibesac_method(max_trials=MAX_ITERS, use_prosac=True):
     def run(pts1, pts2, th, scores=None):
         # vibesac's minimal-sample rejection loop spins forever if asked for
         # 7 unique indices out of fewer than 7 points; guard before it hangs.
@@ -56,15 +56,16 @@ def _vibesac_method(max_trials=MAX_ITERS):
             return None, np.zeros(len(pts1), bool)
         # PROSAC assumes quality-ordered input: sort by SNN ratio ascending
         # (best first) and map the returned mask back to the input order.
-        if scores is not None:
-            order = np.argsort(scores, kind="stable")
-        else:
-            order = np.arange(len(pts1))
+        # use_prosac=False forces plain uniform sampling even if scores are
+        # supplied, for an ablation against the PROSAC-ordered variant.
+        prosac = use_prosac and scores is not None
+        order = np.argsort(scores, kind="stable") if prosac \
+            else np.arange(len(pts1))
         F, inl, n_inl, _score, _trials = _vibesac(
             np.ascontiguousarray(pts1[order]),
             np.ascontiguousarray(pts2[order]),
             th, min_samples=7, max_trials=max_trials, p_success=CONF,
-            use_prosac=scores is not None)
+            use_prosac=prosac)
         if F is None or n_inl < 8 or not np.any(F):
             return None, np.zeros(len(pts1), bool)
         mask = np.zeros(len(pts1), bool)
@@ -82,6 +83,7 @@ F_METHODS = {
 }
 if _vibesac is not None:
     F_METHODS["vibesac"] = _vibesac_method()
+    F_METHODS["vibesac-noprosac"] = _vibesac_method(use_prosac=False)
 
 
 def _dssac_f_budget(p_min):
@@ -103,8 +105,10 @@ def _pydegensac_f_budget(max_iters):
     return run
 
 
-def _vibesac_f_budget(max_trials):
-    return _vibesac_method(max_trials)
+def _vibesac_f_budget(use_prosac=True):
+    def factory(max_trials):
+        return _vibesac_method(max_trials, use_prosac=use_prosac)
+    return factory
 
 
 def _cv2_f_budget(flag):
@@ -133,4 +137,6 @@ F_BUDGETS = {
     "cv2-magsac": (_ITER_BUDGETS_F, _cv2_f_budget(cv2.USAC_MAGSAC), 0.75),
 }
 if _vibesac is not None:
-    F_BUDGETS["vibesac"] = (_ITER_BUDGETS_F, _vibesac_f_budget, 0.85)
+    F_BUDGETS["vibesac"] = (_ITER_BUDGETS_F, _vibesac_f_budget(), 0.85)
+    F_BUDGETS["vibesac-noprosac"] = (_ITER_BUDGETS_F,
+                                     _vibesac_f_budget(use_prosac=False), 0.8)

@@ -193,7 +193,8 @@ error of the pose recovered from F (converted to E with GT intrinsics), per
 This data ships **unfiltered**, so the protocol sweeps the SNN ratio threshold for all methods.
 Baselines also include `vibesac` — a seeded, PROSAC-ordered LO-RANSAC (7-point minimal solver)
 reference implementation from ransac-benchmark-2025's `ransac_benchmark_imc.vibesac`, using the
-SNN ratio as the PROSAC ordering score:
+SNN ratio as the PROSAC ordering score — and `vibesac-noprosac`, the same implementation with
+`use_prosac=False` (plain uniform sampling), to isolate PROSAC's contribution:
 
 ```bash
 bench/setup_f_data.sh
@@ -211,6 +212,7 @@ Best mAA@10° (over the 0.5–2 px inlier-threshold sweep) per method × SNN thr
 | cv2-ransac | 0.173 | 0.210 | 0.253 | 0.281 | **0.303** | 0.291 | 0.074 |
 | cv2-magsac | 0.255 | 0.294 | 0.331 | **0.359** | 0.355 | 0.325 | 0.118 |
 | vibesac | 0.209 | 0.253 | 0.296 | 0.341 | 0.372 | **0.388** | 0.310 |
+| vibesac-noprosac | 0.216 | 0.261 | 0.296 | 0.338 | **0.355** | 0.347 | 0.175 |
 
 Takeaways:
 
@@ -218,6 +220,12 @@ Takeaways:
   more robust to unfiltered input: 0.310 mAA with SNN off entirely, vs. 0.05–0.12 for every
   other method. Its PROSAC ordering by SNN ratio evidently does most of the work that explicit
   ratio-filtering does for the rest of the field.
+- The PROSAC ablation (`vibesac-noprosac`) confirms it: strip the ordering and vibesac drops to
+  0.355 (a dead heat with MAGSAC++, no longer a clear win) and — more tellingly — its unfiltered
+  score collapses from 0.310 to 0.175, in line with the rest of the field. PROSAC ordering isn't
+  a minor tweak here; it accounts for essentially all of vibesac's robustness advantage on
+  unfiltered data, while its LO-RANSAC mechanics alone are worth only a marginal edge over
+  MAGSAC++ at the best SNN.
 - Every other method peaks at SNN 0.75–0.8 and collapses without filtering (mAA ≤ 0.12 even for
   MAGSAC++): the raw tentative matches often have 11–15% inliers, too few for reliable F
   estimation across the board.
@@ -240,12 +248,17 @@ Same construction as the homography figure, at each method's tuned SNN threshold
 inlier-threshold sweep against measured mean runtime. `vibesac` dominates the frontier: its
 cheapest budget (10 iters, 0.4 ms, mAA 0.345) already beats the best budget of every other
 method except MAGSAC++ (0.360), and by its third-cheapest budget (1.0 ms) it has overtaken
-MAGSAC++ too, climbing to 0.39 mAA by 13 ms with no other method ever catching up. Among the
-rest, MAGSAC++ is best, with `dssac-pmin0.1` tracing the second-best frontier
-(0.27 → 0.31 over 0.7–4.5 ms), staying above
-pydegensac until pydegensac's largest budgets catch up, while cv2-RANSAC needs ~7x more time for
-comparable accuracy. The default-`p_min` DS-SAC curve sits consistently below the `p_min = 0.1`
-variant — on this data the deeper search tree buys more than a finer percentile step does.
+MAGSAC++ too, climbing to 0.39 mAA by 13 ms with no other method ever catching up.
+`vibesac-noprosac` traces a visibly lower, flatter curve that tracks MAGSAC++ closely rather
+than beating it (0.325 → 0.356 vs. MAGSAC++'s 0.323 → 0.360) — the gap between the two vibesac
+curves is PROSAC's contribution at each budget, and it *widens* with budget (0.020 at 10 iters
+to 0.036 at 6400): PROSAC's benefit compounds as the trial count grows rather than being
+front-loaded at the cheap end. Among the rest,
+MAGSAC++ is best, with `dssac-pmin0.1` tracing the second-best frontier (0.27 → 0.31 over
+0.7–4.5 ms), staying above pydegensac until pydegensac's largest budgets catch up, while
+cv2-RANSAC needs ~7x more time for comparable accuracy. The default-`p_min` DS-SAC curve sits
+consistently below the `p_min = 0.1` variant — on this data the deeper search tree buys more
+than a finer percentile step does.
 
 Reproduce:
 
